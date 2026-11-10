@@ -1,6 +1,6 @@
-# onenote-mcp
+# onenote-plugin
 
-一个 **stdio MCP server**，让 Claude Code 通过工具调用直接读写本机 **Microsoft OneNote 桌面版**（COM 自动化），操作的是真实本地笔记本（含 `.one` 分区文件），不是云端的 Graph 副本。
+一个 **多宿主 OneNote 插件**：同一份核心同时支持 **Claude Code（stdio MCP）** 与 **DSH（原生 Cordis）**，直接读写本机 **Microsoft OneNote 桌面版**（COM 自动化），操作的是真实本地笔记本（含 `.one` 分区文件），不是云端的 Graph 副本。
 
 - 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
 - 依赖：仅 `@modelcontextprotocol/server`；运行时还需要 Windows PowerShell 5.1（`powershell.exe`）+ 本机 OneNote
@@ -36,7 +36,7 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
 `.mcp.json`，用 `${CLAUDE_PLUGIN_ROOT}` 定位 `server.js`，不依赖机器上的绝对路径。
 
 ```text
-/plugin marketplace add AlawnWalker/cc-onenote
+/plugin marketplace add AlawnWalker/onenote-plugin
 /plugin install cc-onenote@cc-onenote
 ```
 
@@ -50,6 +50,30 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
   同时当作项目级 MCP 配置，显示一个等待批准的 `onenote` 条目；这是开发时的副作用，
   正常从其他目录使用插件不需要批准它。
 
+## 作为 DSH 插件安装（原生 Cordis）
+
+同一仓库 / 同一个 npm 包也包含 DSH 原生入口（`dsh/index.js` + `cordis.patch.yml`）。
+安装脚本会同步源码到 `DSH_HOME`、登记 profile 依赖与 bundle，并移除旧的 `dsh-onenote`
+条目（旧目录保留作回滚）：
+
+```powershell
+# 先看计划（不写任何文件）
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
+
+# 真正安装（DSH 关闭或在运行中都行；装完必须重启桌面端）
+powershell -ExecutionPolicy Bypass -File .\install.ps1 `
+  -DshCli "<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd" `
+  -Registry http://172.27.30.100:8765/
+```
+
+- `DSH_HOME` 决定装进哪个 home（桌面端读取它）；本机是
+  `D:\Leon\Deepseek\Workpsace`，不要装到 `%USERPROFILE%\.dsh` 的旧 home。
+- 重启后工具名是 `onenote_*`（DSH 原生），不是 `mcp__...` 前缀。
+- `install.ps1 -ExtraSectionName/-ExtraSectionPath` 只写入**已安装包内**的
+  `cordis.patch.yml`；如果 profile 里存在同 `id: dsh-onenote` 的覆盖条目，
+  **覆盖会整块替换 config**，此时应把 `extraSections` 写进 profile 覆盖
+  （脚本会给出警告）。
+
 ## 配置（环境变量）
 
 | env | 默认 | 说明 |
@@ -58,11 +82,13 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
 | `ONENOTE_TIMEOUT_MS` | `180000` | 单次调用超时；冷启动会拉起 OneNote，第一次可能 1–3 分钟 |
 | `ONENOTE_PAGECOLOR` | `#C7EDCC`（豆沙绿） | `#RRGGBB` / `automatic` / `none`；设空字符串 `""` 跟随 OneNote 默认 |
 | `ONENOTE_PAGESIZE` | 空（Automatic） | JSON 字符串，如 `{"width":1190,"height":842,"landscape":true}`，或 `"automatic"` |
-| `ONENOTE_CODE_PREFIX` | `│ ` | 代码块每行的前缀；设 `""` 会去掉竖线，但读回时无法识别为代码 |
+| `ONENOTE_CODE_PREFIX` | `│ ` | 代码块每行的可视前缀；设 `""` 只去掉竖线，读回仍按 Consolas/monospace 字体识别为代码 |
 | `ONENOTE_ALIGN_COMMENT_COLUMN` | `0` | `0` 不处理 / `auto` 对齐到最长代码+2 / `N` 固定列（按字节算） |
 | `ONENOTE_ALIGN_COMMENT_MAX` | `80` | `auto` 对齐的列上限 |
 | `ONENOTE_BULLET_VALUE` | `1` | OneNote 项目符号字形索引（0 大黑圆、1 实心点 U+2022、3 空心圆、7 菱形） |
 | `ONENOTE_BULLET_VALUES` | `[]` | JSON 数组，按层级指定字形，如 `[20, 2]`；最后一项重复 |
+| `ONENOTE_NEST_UNDER_HEADINGS` | 空（关） | `1`/`true` 把标题后的内容按层级缩进（DSH 原生索引） |
+| `ONENOTE_INDENTED_CHILDREN` | 空（关） | `1`/`true` 把列表项后的缩进行当作子段落 |
 | `ONENOTE_EXTRASECTIONS` | `[]` | JSON 数组。**独立分区必须按 `path` 记**（ID 每次重启会变），如 `[{"name":"快速笔记","path":"<你的路径>\\快速笔记.one"}]` |
 
 ### 用户配置文件（插件启动器）
@@ -82,12 +108,34 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
 
 手动 `claude mcp add ... server.js` 的启动方式不经过这个启动器，仍需用 `-e` 传环境变量。
 
+### DSH profile 配置覆盖（整块替换）
+
+在 `DSH_HOME\profiles\desktop\cordis.patch.yml` 里按 `id: dsh-onenote` 覆盖插件配置。
+**注意：覆盖是整块替换，不是深合并**——只写一个键会让其余键回落到插件默认值
+（页面底色、代码前缀、符号、嵌套、独立分区都会变）。迁移时请把完整块抄过去：
+
+```yaml
+- id: dsh-onenote
+  name: onenote-plugin/dsh
+  config:
+    codePrefix: ''
+    alignCommentColumn: 'auto'
+    alignCommentMax: 80
+    pageColor: '#C7EDCC'
+    bulletValues: [20, 2]
+    nestUnderHeadings: true
+    indentedChildren: true
+    extraSections:
+      - name: '快速笔记'
+        path: 'C:\Users\<you>\Documents\OneNote Notebooks\快速笔记.one'
+```
+
 ## 工具
 
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
 | `onenote_list` | `notebook?` `section?` `includePages?` `includeRecycleBin?` `maxSections?` `maxPages?` | 笔记本 → 分区 → 页面树，返回所有 ID |
-| `onenote_read` | `pageId` 或 `sectionId`/`sectionName` + `pageTitle`、`maxBlocks?`、`withIds?` | 读页面，转 Markdown；`withIds=true` 额外返回每个 block 的 `objectId`（供 `onenote_edit` 用） |
+| `onenote_read` | `pageId` 或 `sectionId`/`sectionName` + `pageTitle`、`maxBlocks?`、`withIds?` | 读页面，转 Markdown；`withIds=true` 在模型可见输出末尾附 `blocks (objectId)` 列表（CC 与 DSH 均生效，供 `onenote_edit` 用） |
 | `onenote_search` | `query` `scopeId?` `limit?` `includeContent?` `maxScan?` | 自扫层级；标题子串（快），`includeContent=true` 再扫正文（约 50ms/页） |
 | `onenote_create` | `sectionId`/`sectionName`、`title`、`markdown` | 建页；标题也可由 markdown 的 `# 标题` 提供 |
 | `onenote_update` | 页面定位 + `title?` + `markdown` | 改写已有页：删掉原文本 Outline 后写新内容 |
@@ -119,7 +167,7 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 
 读回时按「相对正文的字号差」识别标题：≥ 正文+3 认 `##`，≥ 正文+1 认 `###`；旧版本写的 `━━━ 标题 ━━━`、`▌ 标题` 仍然兼容读成 `##`/`###`。代码块在标题判定之前按 Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码行不会被误判成 `##`。
 
-`onenote_read(withIds=true)` 的模型可见输出会在末尾附 `blocks (objectId):` 列表，可直接把其中的 `objectId` 交给 `onenote_edit`。
+`onenote_read(withIds=true)` 的模型可见输出会在末尾附 `blocks (objectId):` 列表（CC 与 DSH 均生效），可直接把其中的 `objectId` 交给 `onenote_edit`。
 
 ## 已知限制
 
@@ -155,6 +203,11 @@ npm test
 
 # 真机冒烟：list → create → read → delete，需要非沙箱 + OneNote
 npm run smoke
+
+# DSH 真机契约（需要本机 DSH 安装目录）：
+#   $env:DSH_ELECTRON="<...>\DeepSeek Harness.exe"
+#   $env:DSH_ASAR_MODULES="<...>\resources\app.asar\dsh\node_modules"
+node dev/host-contract.mjs
 ```
 
 COM 逻辑全在 `scripts/onenote-bridge.ps1`（纯 ASCII，中文走 JSON）。
