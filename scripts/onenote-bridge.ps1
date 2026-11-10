@@ -619,13 +619,15 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 if ($null -ne $list.SelectSingleNode('./*[local-name()="Bullet"]')) { $kind = 'bullet' }
                 elseif ($null -ne $list.SelectSingleNode('./*[local-name()="Number"]')) { $kind = 'number' }
             }
-            if ($kind -eq 'para' -and $text -ne '') {
+            if ($kind -eq 'para') {
                 # Code blocks written by this plugin carry a monospace family and
                 # the body size; recognise them before the heading heuristics so a
                 # heading above cannot turn them into h2/h3 on the way back out.
+                # Empty code lines keep their OE, so classify them before the
+                # empty-text guard as well.
                 if (Test-OeIsCode $child) {
                     $kind = 'code'
-                } else {
+                } elseif ($text -ne '') {
                     # Formatted headings written by this plugin sit above the body
                     # size: h3 = base + 2, h2 = base + 4.
                     $size = Get-OeFontSize $child
@@ -640,7 +642,7 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 $tableBlock['outlineId'] = $script:CurrentOutlineId
                 [void]$out.Add($tableBlock)
             }
-            if ($text -ne '') {
+            if ($text -ne '' -or $kind -eq 'code') {
                 [void]$out.Add([ordered]@{ type = $kind; text = $text; level = $level; objectId = $oid; outlineId = $script:CurrentOutlineId })
             }
             foreach ($kids in $child.SelectNodes('./*[local-name()="OEChildren"]')) {
