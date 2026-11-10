@@ -1,0 +1,55 @@
+# ============================================================================
+# onenote-plugin — DSH bundle patch (host layer)
+# ============================================================================
+# Mounts dsh/index.js, which registers the onenote_* tools. Each tool call runs
+# a short-lived powershell.exe that speaks to OneNote through COM.
+#
+# extraSections: standalone sections that are not attached to a notebook (e.g.
+# the local quick-notes section). Key them by `path` — OneNote reassigns the
+# section ID across restarts, but the .one file path is stable. They are listed
+# by onenote_list and can be used as a create target through sectionName.
+# ============================================================================
+- insert:
+    - id: dsh-onenote
+      name: onenote-plugin/dsh
+      config:
+        powershellPath: 'powershell.exe'
+        timeoutMs: 180000
+        # Page background written on create/update/append. Empty = inherit
+        # OneNote's own default; here it pins the eye-friendly green
+        # (199,237,204) so generated pages look the same on every machine.
+        pageColor: '#C7EDCC'
+        # pageSize is intentionally NOT set: pages keep OneNote's Automatic size
+        # (A4, ~61 half-width chars per 12pt line). Set it explicitly when a
+        # document needs wider lines, e.g.:
+        #   pageSize: { width: 1190, height: 842, landscape: true,
+        #               margins: { top: 36, bottom: 36, left: 36, right: 36 } }
+        # Standalone sections (local .one files that belong to no notebook).
+        # Key them by `path`: OneNote reassigns section IDs on every restart, the
+        # file path is stable. They show up in onenote_list and can be used as a
+        # create target via sectionName.
+        #
+        # Left EMPTY on purpose - a real notebook path is machine specific and
+        # must not be committed. Fill it in one of two ways:
+        #   1. install.ps1 -ExtraSectionName '快速笔记' -ExtraSectionPath 'C:\...\快速笔记.one'
+        #   2. edit the installed copy under
+        #      <DSH_HOME>/profiles/<profile>/node_modules/onenote-plugin/cordis.patch.yml
+        #
+        # extraSections:
+        #   - name: '<section name>'
+        #     path: '<absolute .one path>'
+        extraSections: []
+        # --- code block rendering ---------------------------------------------
+        # Prefix for every source line of a fenced block. Default "│ " (the bar),
+        # which is also what read-back uses to recognise code blocks; set it to
+        # '' to drop the bar, at the cost of those lines reading back as plain
+        # paragraphs.
+        codePrefix: '│ '
+        # Comment alignment: 0 = off (default, byte-identical to earlier output)
+        #                    'auto' = align to longest code part + 2
+        #                    N > 0  = align to column N
+        alignCommentColumn: 0
+        alignCommentMax: 80
+        # OneNote bullet glyph index; per-level list repeats its last entry.
+        bulletValue: 1
+        bulletValues: []
