@@ -55,7 +55,7 @@ $script:HResultMap = @{
     '80042015' = @{ code = 'NOTEBOOK_NOT_FOUND'; hint = 'the notebook does not exist' }
     '80042018' = @{ code = 'GROUP_NOT_FOUND'; hint = 'the section group/folder does not exist' }
     '80042019' = @{ code = 'INVALID_QUERY'; hint = 'the query is invalid' }
-    '8004201A' = @{ code = 'FILE_EXISTS'; hint = 'the target file already exists' }
+    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path — the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
     '8004201B' = @{ code = 'SECTION_LOCKED'; hint = 'the section is encrypted and locked' }
     '8004201C' = @{ code = 'DISABLED_BY_POLICY'; hint = 'the action is disabled by policy' }
     '80042020' = @{ code = 'INVALID_XML_SCHEMA'; hint = 'the OneNote XML schema is invalid' }
@@ -176,6 +176,28 @@ function Get-OeFontSize($oe) {
         if ($m.Success) { return [double]$m.Groups[1].Value }
     }
     return 0
+}
+
+# Effective font family of one outline element (same precedence as font size).
+# Used to recognise code blocks when codePrefix is empty: the writer pins them to
+# a monospace family, so read-back does not have to rely on a text marker.
+function Get-OeFontFamily($oe) {
+    $styles = New-Object System.Collections.ArrayList
+    if ($oe.HasAttribute('style')) { [void]$styles.Add($oe.GetAttribute('style')) }
+    foreach ($t in $oe.SelectNodes('./*[local-name()="T"]')) {
+        if ($t.HasAttribute('style')) { [void]$styles.Add($t.GetAttribute('style')) }
+    }
+    foreach ($s in $styles) {
+        $m = [regex]::Match([string]$s, 'font-family:\s*([^;"]+)')
+        if ($m.Success) { return $m.Groups[1].Value.Trim().ToLowerInvariant() }
+    }
+    return ''
+}
+
+function Test-OeIsCode($oe) {
+    $family = Get-OeFontFamily $oe
+    if ($family -eq '') { return $false }
+    return ($family -match 'consolas|courier|monaco|menlo|mono')
 }
 
 # ---------------------------------------------------------------------------
@@ -391,6 +413,13 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             $delta = [int]$script:HeadingDelta[$type]
             $space = $script:HeadingSpace[$type]
             $headingXml = ' style="font-size:' + (Format-PtSize ($script:BaseFontSize + $delta)) + '" spaceBefore="' + $space.before + '" spaceAfter="' + $space.after + '"'
+        } elseif ($type -eq 'code') {
+            # Pin code lines to the body size and a monospace family. Without an
+            # explicit size they inherit the surrounding paragraph style (a heading
+            # written just above makes them look like h2/h3 on read-back), and the
+            # font family is what read-back uses to recognise a code block when
+            # codePrefix is empty.
+            $headingXml = ' style="font-size:' + (Format-PtSize $script:BaseFontSize) + ';font-family:Consolas"'
         }
         [void]$sb.Append('<one:OE' + $headingXml + '>' + $listXml + '<one:T>' + (ConvertTo-CData $text) + '</one:T>')
         $children = @($node.children)
@@ -591,11 +620,18 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 elseif ($null -ne $list.SelectSingleNode('./*[local-name()="Number"]')) { $kind = 'number' }
             }
             if ($kind -eq 'para' -and $text -ne '') {
-                # Formatted headings written by this plugin sit above the body
-                # size: h3 = base + 2, h2 = base + 4.
-                $size = Get-OeFontSize $child
-                if ($size -ge ($script:BaseFontSize + 3)) { $kind = 'h2' }
-                elseif ($size -ge ($script:BaseFontSize + 1)) { $kind = 'h3' }
+                # Code blocks written by this plugin carry a monospace family and
+                # the body size; recognise them before the heading heuristics so a
+                # heading above cannot turn them into h2/h3 on the way back out.
+                if (Test-OeIsCode $child) {
+                    $kind = 'code'
+                } else {
+                    # Formatted headings written by this plugin sit above the body
+                    # size: h3 = base + 2, h2 = base + 4.
+                    $size = Get-OeFontSize $child
+                    if ($size -ge ($script:BaseFontSize + 3)) { $kind = 'h2' }
+                    elseif ($size -ge ($script:BaseFontSize + 1)) { $kind = 'h3' }
+                }
             }
             $table = $child.SelectSingleNode('./*[local-name()="Table"]')
             if ($null -ne $table) {
@@ -1284,6 +1320,20 @@ function Action-Publish($params) {
     }
     $overwrite = $true
     if ($null -ne $params.overwrite) { $overwrite = [bool]$params.overwrite }
+    # OneNote's Publish validates the extension against the chosen format; a
+    # mismatched extension fails with 0x8004201A even when the file does not
+    # exist (html must be .htm, not .html). Normalise instead of failing.
+    $extensionByFormat = @{
+        one = '.one'; onepkg = '.onepkg'; mht = '.mht'; pdf = '.pdf'
+        xps = '.xps'; docx = '.docx'; doc = '.docx'; emf = '.emf'; html = '.htm'
+    }
+    $wantedExtension = $extensionByFormat[$formatName]
+    if ($null -ne $wantedExtension) {
+        $currentExtension = [IO.Path]::GetExtension($target)
+        if ($currentExtension.ToLowerInvariant() -ne $wantedExtension) {
+            $target = [IO.Path]::ChangeExtension($target, $wantedExtension)
+        }
+    }
     if (Test-Path -LiteralPath $target) {
         if (-not $overwrite) { Fail 'FILE_EXISTS' ('target exists: ' + $target) }
         Remove-Item -LiteralPath $target -Force

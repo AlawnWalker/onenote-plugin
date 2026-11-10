@@ -2,7 +2,7 @@
 
 一个 **stdio MCP server**，让 Claude Code 通过工具调用直接读写本机 **Microsoft OneNote 桌面版**（COM 自动化），操作的是真实本地笔记本（含 `.one` 分区文件），不是云端的 Graph 副本。
 
-- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
+- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
 - 依赖：仅 `@modelcontextprotocol/server`；运行时还需要 Windows PowerShell 5.1（`powershell.exe`）+ 本机 OneNote
 - 架构：每次工具调用 → 写 `req.json` → spawn `powershell.exe` 跑 `scripts/onenote-bridge.ps1`（COM）→ 读 `res.json`（§13 A 方案）
 
@@ -93,7 +93,7 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
 | `onenote_update` | 页面定位 + `title?` + `markdown` | 改写已有页：删掉原文本 Outline 后写新内容 |
 | `onenote_append` | 页面定位 + `markdown` | 页面末尾追加一个 Outline |
 | `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；只重发该 block 所在的 Outline，其余内容与格式不动 |
-| `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等 |
+| `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等；目标扩展名会按格式归一化（`format=html` 写 `.htm`） |
 | `onenote_delete` | 页面定位 + `permanent?` | 删页，默认进回收站 |
 | `onenote_create_section` | `path`（.one 绝对路径）、`keepBlankPage?` | 建/打开独立分区；新建时自动生成的空白页会删掉，`keepBlankPage=true` 保留 |
 | `onenote_rename_section` | `sectionId` 或 `path`、`name` | 改分区名；**独立分区只读**（`0x8004200B`），笔记本内分区可改 |
@@ -110,14 +110,16 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 | `## 标题` | 真字号段落：正文 +4pt，段前 8pt / 段后 5pt | `## 标题` |
 | `### 标题` | 真字号段落：正文 +2pt，段前 5pt / 段后 5pt | `### 标题` |
 | `> 引用` | `▎ 引用` 段落 | `> 引用` |
-| ``` 代码块 | 每行一个 `│ 代码行` 段落 | 代码块（语言标记丢失） |
+| ``` 代码块 | 每行一个代码段落（正文尺寸 + Consolas；`codePrefix` 非空时再加强制前缀） | 代码块（语言标记丢失；`codePrefix=''` 也能靠字体识别） |
 | `- 项` / 缩进 | 真项目符号列表 | 缩进还原 |
 | `1. 项` | 项目符号 + 文本 `1. ` | `1. 项` |
 | `\| 表格 \|` | 真 OneNote 表格 | Markdown 表格 |
 
 **正文基准字号**按这个顺序解析：目标页面自己的正文样式（`QuickStyleDef name="p"`，其次取出现最多的字号）→ 同分区取样（≤5 页）→ 注册表 `DefaultFontSize`（只读）→ 回落 12pt。`onenote_create` 的返回里带 `baseFontSize`，便于确认本次基准。
 
-读回时按「相对正文的字号差」识别标题：≥ 正文+3 认 `##`，≥ 正文+1 认 `###`；旧版本写的 `━━━ 标题 ━━━`、`▌ 标题` 仍然兼容读成 `##`/`###`。
+读回时按「相对正文的字号差」识别标题：≥ 正文+3 认 `##`，≥ 正文+1 认 `###`；旧版本写的 `━━━ 标题 ━━━`、`▌ 标题` 仍然兼容读成 `##`/`###`。代码块在标题判定之前按 Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码行不会被误判成 `##`。
+
+`onenote_read(withIds=true)` 的模型可见输出会在末尾附 `blocks (objectId):` 列表，可直接把其中的 `objectId` 交给 `onenote_edit`。
 
 ## 已知限制
 
@@ -126,7 +128,7 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 3. 代码块语言标记（```js 的 `js`）无法保存。
 4. 首次调用慢：OneNote 没跑时 COM 会拉起它并同步，可能 1–3 分钟，超时重试即可。
 5. COM 需要非沙箱：OneNote 的 COM 服务器在文件沙箱里以 `0x80080005 (CO_E_SERVER_EXEC_FAILURE)` 失败。
-6. `onenote_publish` 目标路径要用反斜杠（正斜杠报 `0x80042006`）；PDF 导出永远白底。
+6. `onenote_publish` 目标路径要用反斜杠（正斜杠报 `0x80042006`）；扩展名必须与格式匹配（`html`→`.htm`，`mht`→`.mht`，`docx`→`.docx`，`pdf`→`.pdf`），插件会自动归一化；不匹配时报 `INVALID_TARGET_PATH`（OneNote `0x8004201A`）。PDF 导出永远白底。
 7. 长 ASCII 图会被页宽折行（默认 A4 竖排正文宽 468pt ≈ 61 半角字符/行）。
 8. **独立分区既不能改名也不能删除**：`UpdateHierarchy` 和 `DeleteHierarchy` 对独立 `.one` 分区都返回 `0x8004200B SECTION_READ_ONLY`；笔记本内的分区可改名。要移除独立分区只能删 `.one` 文件后重启 OneNote。
 9. **新建分区会自带一个空白页**：`onenote_create_section` 默认删除它（仅当分区只有这一页且无正文时），`keepBlankPage=true` 可保留。

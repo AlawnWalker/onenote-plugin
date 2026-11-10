@@ -1,62 +1,62 @@
 {
-  "name": "onenote-plugin",
-  "version": "0.6.0",
-  "description": "Local Microsoft OneNote desktop tools for Claude Code (MCP) and DSH (native Cordis): list/read/search/create/update/append/edit/publish/delete pages and sections.",
-  "type": "module",
-  "main": "server.js",
-  "exports": {
-    ".": "./server.js",
-    "./dsh": "./dsh/index.js",
-    "./package.json": "./package.json"
-  },
-  "bin": {
-    "onenote-mcp": "server.js"
-  },
-  "scripts": {
-    "start": "node server.js",
-    "test": "node --test",
-    "smoke": "node dev/live-smoke.mjs"
-  },
-  "keywords": [
-    "mcp",
-    "dsh",
-    "dsh-plugin",
-    "onenote",
-    "com",
-    "notes",
-    "markdown"
-  ],
-  "license": "UNLICENSED",
-  "engines": {
-    "node": ">=18.17",
-    "dsh": ">=0.2.1-rc.2"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/server": "^2.4.0"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "*"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-tools": {
-      "optional": true
-    }
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
-  "files": [
-    "server.js",
-    "dsh",
-    "lib",
-    "scripts",
-    "skills",
-    ".claude-plugin",
-    ".mcp.json",
-    "cordis.patch.yml",
-    "install.ps1",
-    "README.md"
-  ]
+    "name":  "onenote-plugin",
+    "version":  "0.6.1",
+    "description":  "Local Microsoft OneNote desktop tools for Claude Code (MCP) and DSH (native Cordis): list/read/search/create/update/append/edit/publish/delete pages and sections.",
+    "type":  "module",
+    "main":  "server.js",
+    "exports":  {
+                    ".":  "./server.js",
+                    "./dsh":  "./dsh/index.js",
+                    "./package.json":  "./package.json"
+                },
+    "bin":  {
+                "onenote-mcp":  "server.js"
+            },
+    "scripts":  {
+                    "start":  "node server.js",
+                    "test":  "node --test",
+                    "smoke":  "node dev/live-smoke.mjs"
+                },
+    "keywords":  [
+                     "mcp",
+                     "dsh",
+                     "dsh-plugin",
+                     "onenote",
+                     "com",
+                     "notes",
+                     "markdown"
+                 ],
+    "license":  "UNLICENSED",
+    "engines":  {
+                    "node":  "\u003e=18.17",
+                    "dsh":  "\u003e=0.2.1-rc.2"
+                },
+    "dependencies":  {
+                         "@modelcontextprotocol/server":  "^2.4.0"
+                     },
+    "peerDependencies":  {
+                             "@deepseek-ai/dsh-tools":  "*"
+                         },
+    "peerDependenciesMeta":  {
+                                 "@deepseek-ai/dsh-tools":  {
+                                                                "optional":  true
+                                                            }
+                             },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "files":  [
+                  "server.js",
+                  "dsh",
+                  "lib",
+                  "scripts",
+                  "skills",
+                  ".claude-plugin",
+                  ".mcp.json",
+                  "cordis.patch.yml",
+                  "install.ps1",
+                  "README.md"
+              ]
 }

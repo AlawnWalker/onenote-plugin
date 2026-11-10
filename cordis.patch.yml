@@ -41,9 +41,9 @@
         extraSections: []
         # --- code block rendering ---------------------------------------------
         # Prefix for every source line of a fenced block. Default "│ " (the bar),
-        # which is also what read-back uses to recognise code blocks; set it to
-        # '' to drop the bar, at the cost of those lines reading back as plain
-        # paragraphs.
+        # a readable gutter. Read-back also recognises code by its pinned
+        # monospace style, so '' only drops the gutter text — the block still
+        # round-trips as a fenced code block.
         codePrefix: '│ '
         # Comment alignment: 0 = off (default, byte-identical to earlier output)
         #                    'auto' = align to longest code part + 2
