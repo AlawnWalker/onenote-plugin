@@ -89,7 +89,7 @@ if ($DryRun) {
 }
 
 function Invoke-Robocopy([string]$from, [string]$to) {
-    robocopy $from $to /MIR /XD node_modules .git /NFL /NDL /NJH /NJS /NP | Out-Null
+    robocopy $from $to /MIR /XD node_modules .git .superpowers /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE ($from -> $to)" }
     $global:LASTEXITCODE = 0
 }
