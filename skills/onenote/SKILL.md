@@ -25,6 +25,7 @@ app on Windows via COM automation**. It works on the real local notebooks and
 | `onenote_create` | Create a page from Markdown |
 | `onenote_update` | Rewrite an existing page from Markdown |
 | `onenote_append` | Append an outline to a page |
+| `onenote_edit` | Edit one block in place (`replaceText` / `replaceBlock` / `insertAfter` / `deleteBlock`) |
 | `onenote_publish` | Export a page to `.one` / `.pdf` / `.docx` / `.html` / ... |
 | `onenote_delete` | Delete a page (recycle bin by default) |
 | `onenote_create_section` | Create or open a standalone `.one` section |

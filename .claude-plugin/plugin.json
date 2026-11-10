@@ -1,13 +1,13 @@
 {
   "name": "cc-onenote",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Read and write the local Microsoft OneNote desktop app (Windows COM) through MCP tools: list/read/search/create/update/append/publish/delete pages and sections, and import Markdown by chapter.",
   "author": {
     "name": "AlawnWalker",
     "url": "https://github.com/AlawnWalker"
   },
-  "homepage": "https://github.com/AlawnWalker/cc-onenote",
-  "repository": "https://github.com/AlawnWalker/cc-onenote",
+  "homepage": "https://github.com/AlawnWalker/onenote-plugin",
+  "repository": "https://github.com/AlawnWalker/onenote-plugin",
   "license": "UNLICENSED",
   "keywords": [
     "onenote",
