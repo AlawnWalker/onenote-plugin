@@ -37,7 +37,7 @@ claude mcp add onenote -e ONENOTE_EXTRASECTIONS="[{\"name\":\"快速笔记\",\"p
 
 ```text
 /plugin marketplace add AlawnWalker/onenote-plugin
-/plugin install cc-onenote@cc-onenote
+/plugin install onenote-plugin@onenote-plugin
 ```
 
 - 首次启动由 `scripts/start.mjs` 在插件目录自动执行 `npm install --omit=dev`；
