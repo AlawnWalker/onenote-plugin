@@ -26,7 +26,7 @@ if (existsSync(configPath)) {
       }
     }
   } catch (err) {
-    console.error("cc-onenote: ignoring invalid config " + configPath + ": " + err.message);
+    console.error("onenote-plugin: ignoring invalid config " + configPath + ": " + err.message);
   }
 }
 
@@ -43,7 +43,7 @@ if (!existsSync(sdkMarker)) {
           stdio: ["ignore", "ignore", "inherit"],
         });
   if (result.status !== 0) {
-    console.error("cc-onenote: dependency installation failed; run `npm install` in " + root);
+    console.error("onenote-plugin: dependency installation failed; run `npm install` in " + root);
     process.exit(1);
   }
 }

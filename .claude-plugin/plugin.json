@@ -1,6 +1,6 @@
 {
-  "name": "cc-onenote",
-  "version": "0.6.1",
+  "name": "onenote-plugin",
+  "version": "0.6.2",
   "description": "Read and write the local Microsoft OneNote desktop app (Windows COM) through MCP tools: list/read/search/create/update/append/publish/delete pages and sections, and import Markdown by chapter.",
   "author": {
     "name": "AlawnWalker",

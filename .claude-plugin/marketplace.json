@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "cc-onenote",
+  "name": "onenote-plugin",
   "description": "Local Microsoft OneNote MCP server for Claude Code",
   "owner": {
     "name": "AlawnWalker"
   },
   "plugins": [
     {
-      "name": "cc-onenote",
-      "version": "0.6.1",
+      "name": "onenote-plugin",
+      "version": "0.6.2",
       "description": "Read and write the local OneNote desktop app via COM automation: pages, sections, search, Markdown import.",
       "author": {
         "name": "AlawnWalker"
