@@ -16,7 +16,9 @@
 
     Machine-specific section paths stay OUT of the repo: the shipped
     cordis.patch.yml has extraSections: []; -ExtraSectionPath fills it into the
-    installed copy only.
+    installed copy only. A profile override for id dsh-onenote replaces the
+    whole config block; when one exists, set extraSections there instead (this
+    script warns about the shadowing).
 
     Restart the DSH desktop app after installing: bundles are composed at
     startup.
@@ -52,6 +54,23 @@ if (-not (Test-Path -LiteralPath $pkgPath)) {
 }
 
 $depValue = 'file:' + ($staging -replace '\\', '/')
+
+# A profile override with the same id replaces the whole config block, so the
+# installed bundle patch (and -ExtraSectionPath) is shadowed. Detect it so the
+# installer warns instead of silently claiming success.
+function Test-ProfileOverrideHasConfig([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $lines = [IO.File]::ReadAllLines($path, $utf8NoBom)
+    $inEntry = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\s*-\s*id:\s*dsh-onenote\s*$') { $inEntry = $true; continue }
+        if ($inEntry -and $line -match '^\s*-\s') { break }
+        if ($inEntry -and $line -match '^\s{2,}config:\s*$') { return $true }
+    }
+    return $false
+}
+$profileOverrideShadowsConfig = Test-ProfileOverrideHasConfig (Join-Path $profileDir 'cordis.patch.yml')
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $pkg = [IO.File]::ReadAllText($pkgPath, $utf8) | ConvertFrom-Json
 
@@ -84,6 +103,9 @@ if ($DryRun) {
     if ($hasLegacyBundle) { Write-Host "[DryRun] would remove  dsh.profile.bundles -= $legacyName" }
     if ($ExtraSectionPath -ne '') {
         Write-Host "[DryRun] would set     extraSections: $sectionName -> $ExtraSectionPath"
+    }
+    if ($ExtraSectionPath -ne '' -and $profileOverrideShadowsConfig) {
+        Write-Warning "the profile override for id dsh-onenote replaces the whole config block; extraSections written into the installed bundle patch will be shadowed - put extraSections in the profile override instead."
     }
     exit 0
 }
@@ -119,6 +141,10 @@ if ($ExtraSectionPath -ne '') {
             Write-Host "  extraSections: $name -> $ExtraSectionPath"
         }
     }
+}
+
+if ($ExtraSectionPath -ne '' -and $profileOverrideShadowsConfig) {
+    Write-Warning "the profile override for id dsh-onenote replaces the whole config block; the extraSections written above are shadowed - put extraSections in the profile override instead."
 }
 
 Write-Host "[3/5] register in $pkgPath"
