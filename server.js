@@ -71,6 +71,7 @@ async function main() {
   const handlers = makeToolHandlers({
     bridge,
     renderOptions: {
+      indentedChildren: config.indentedChildren,
       codePrefix: config.codePrefix,
       alignCommentColumn: config.alignCommentColumn,
       alignCommentMax: config.alignCommentMax,

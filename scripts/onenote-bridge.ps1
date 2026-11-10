@@ -373,7 +373,11 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
         }
         $text = [string]$node.text
         $listXml = ''
-        $levelBullet = Get-BulletValueForLevel $depth
+        # Blocks carry the level they had in the markdown source; fall back to the
+        # render depth when a node has none.
+        $bulletDepth = $depth
+        if ($null -ne $node.level) { $bulletDepth = [int]$node.level }
+        $levelBullet = Get-BulletValueForLevel $bulletDepth
         if ($type -eq 'bullet') {
             $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="11.0"/></one:List>'
         } elseif ($type -eq 'number') {
@@ -403,34 +407,44 @@ function Convert-BlocksToOutline([object]$blocks) {
     $blocks = @($blocks)
     if ($blocks.Count -eq 0) { return '' }
     $root = New-Object System.Collections.ArrayList
-    $stack = New-Object System.Collections.Stack
-    $stack.Push($root)
+    # containers[L] receives the nodes of nesting level L; containers[0] is the
+    # current section. A heading opens a new section when NestUnderHeadings is on.
+    $containers = New-Object System.Collections.ArrayList
+    [void]$containers.Add($root)
+    $headingOpen = $false
     foreach ($block in $blocks) {
         $type = [string]$block.type
-        if ($type -eq 'bullet' -or $type -eq 'number') {
-            $level = 0
-            if ($null -ne $block.level) { $level = [int]$block.level }
-            if ($level -lt 0) { $level = 0 }
-            while ($stack.Count - 1 -gt $level) { [void]$stack.Pop() }
-            $container = $stack.Peek()
-            $node = @{
-                type     = $type
-                text     = [string]$block.text
-                ordinal  = $block.ordinal
-                children = (New-Object System.Collections.ArrayList)
-            }
-            [void]$container.Add($node)
-            $stack.Push($node.children)
-        } else {
-            while ($stack.Count -gt 1) { [void]$stack.Pop() }
-            $container = $stack.Peek()
-            [void]$container.Add(@{
-                type  = $type
-                text  = [string]$block.text
-                rows  = $block.rows
-                children = $null
-            })
+        $node = @{
+            type     = $type
+            text     = [string]$block.text
+            ordinal  = $block.ordinal
+            rows     = $block.rows
+            level    = 0
+            children = (New-Object System.Collections.ArrayList)
         }
+        if ($null -ne $block.level) { $node.level = [int]$block.level }
+        if ($node.level -lt 0) { $node.level = 0 }
+
+        if ($type -eq 'h2' -or $type -eq 'h3') {
+            [void]$root.Add($node)
+            while ($containers.Count -gt 1) { $containers.RemoveAt($containers.Count - 1) }
+            if ($script:NestUnderHeadings) {
+                [void]$containers.Add($node.children)
+                $headingOpen = $true
+            }
+            continue
+        }
+
+        $level = $node.level
+        # Content under an open heading lives one level deeper than its markdown
+        # level, so the whole section body is indented by OneNote.
+        if ($headingOpen) { $level += 1 }
+        # A paragraph may sit deeper than the current list nesting; clamp instead
+        # of creating a stray level.
+        if ($level -gt $containers.Count - 1) { $level = $containers.Count - 1 }
+        while ($containers.Count - 1 -gt $level) { $containers.RemoveAt($containers.Count - 1) }
+        [void]$containers[$level].Add($node)
+        [void]$containers.Add($node.children)
     }
     $sb = New-Object System.Text.StringBuilder
     Render-OENodes $root $sb
@@ -1374,6 +1388,10 @@ try {
     # 3 = hollow circle, 6 = star, 7 = diamond, 20 = arrowhead.
     $script:BulletValue = '1'
     $script:BulletValues = @()
+    $script:NestUnderHeadings = $false
+    if ($null -ne $payload.params -and $null -ne $payload.params.nestUnderHeadings) {
+        $script:NestUnderHeadings = [bool]$payload.params.nestUnderHeadings
+    }
     if ($null -ne $payload.params) {
         if ($null -ne $payload.params.bulletValue) {
             $script:BulletValue = [string]$payload.params.bulletValue
