@@ -97,6 +97,40 @@ test("tools/call returns markdown content for onenote_read", async () => {
   await server.close();
 });
 
+test("tools/call exposes objectIds for withIds reads", async () => {
+  const bridge = fakeBridge((action) => {
+    if (action === "read") {
+      return {
+        pageId: "{PAGE}",
+        title: "页面",
+        lastModified: "2026-11-03T00:00:00.000Z",
+        blockCount: 2,
+        truncated: false,
+        blocks: [
+          { type: "para", text: "正文", level: 0, objectId: "{OID-1}" },
+          { type: "bullet", text: "项目", level: 0, objectId: "{OID-2}" },
+        ],
+      };
+    }
+    return {};
+  });
+  const handlers = makeToolHandlers({ bridge });
+  const { client, server, received } = await startServer(handlers);
+
+  await send(client, 2, "tools/call", {
+    name: "onenote_read",
+    arguments: { pageId: "{PAGE}", withIds: true },
+  });
+  await flush();
+
+  const response = received.find((m) => m.id === 2);
+  assert.equal(response.result.isError, undefined);
+  const text = response.result.content[0].text;
+  assert.match(text, /objectId=\{OID-1\}/);
+  assert.match(text, /objectId=\{OID-2\}/);
+  await server.close();
+});
+
 test("tools/call surfaces bridge errors as isError with the code", async () => {
   const bridge = failingBridge("PAGE_NOT_FOUND", "page not found: 不存在");
   const handlers = makeToolHandlers({ bridge });

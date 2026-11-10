@@ -12,14 +12,14 @@ import { Server } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { OneNoteBridge } from "./lib/bridge.js";
-import { makeToolHandlers } from "./lib/tools.js";
+import { makeToolHandlers, buildIdList } from "./lib/tools.js";
 import { readConfig } from "./lib/config.js";
 import { TOOL_NAMES, TOOL_DESCRIPTIONS, buildJsonSchema } from "./lib/schemas.js";
 
 const SERVER_INFO = { name: "onenote", version: "0.1.0" };
 
 /** Render a handler result into an MCP CallToolResult. */
-function toCallResult(result) {
+function toCallResult(args, result) {
   if (!result || result.ok !== true) {
     const code = result?.code ?? "ONENOTE_ERROR";
     const message = result?.message ?? "OneNote operation failed";
@@ -30,7 +30,7 @@ function toCallResult(result) {
     const header = data.title ? `# ${data.title}\n\n` : "";
     const note = data.truncated ? `\n> ⚠ truncated: only the first ${data.blockCount} blocks shown.\n` : "";
     const footer = `\n---\npageId: ${data.pageId ?? ""}\nlastModified: ${data.lastModified ?? ""}`;
-    return { content: [{ type: "text", text: `${header}${data.markdown}${note}${footer}` }] };
+    return { content: [{ type: "text", text: `${header}${data.markdown}${note}${footer}${buildIdList(args, result)}` }] };
   }
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -59,7 +59,7 @@ export function createMcpServer({ handlers }) {
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
     }
     const result = await handler(args);
-    return toCallResult(result);
+    return toCallResult(args, result);
   });
 
   return server;
