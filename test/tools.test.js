@@ -267,3 +267,44 @@ test("onenote_edit rejects a call without objectId or find", async () => {
   assert.equal(result.code, "BAD_ARGUMENT");
   assert.equal(bridge.calls.length, 0);
 });
+
+/**
+ * DSH rejects a tool result that JSON cannot carry unchanged ("value is not
+ * lossless JSON"). An enumerable `undefined` property is the classic trap: the
+ * body looks fine, but the call is reported as failed *after* its side effect.
+ */
+function assertLossless(value, path = "result") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    assert.ok(Number.isFinite(value), `${path} is not finite`);
+    return;
+  }
+  assert.equal(typeof value, "object", `${path} is not JSON-safe (${typeof value})`);
+  for (const key of Object.keys(value)) {
+    const child = value[key];
+    assert.notEqual(child, undefined, `${path}.${key} is undefined`);
+    assertLossless(child, `${path}.${key}`);
+  }
+}
+
+test("onenote_append returns lossless JSON when markdown has no title", async () => {
+  const bridge = fakeBridge(() => ({ pageId: "{PAGE}", appended: true, chunks: [{ type: "para", text: "x", level: 0 }] }));
+  const handlers = makeToolHandlers({ bridge });
+  const result = await handlers.onenote_append({ pageId: "{PAGE}", markdown: "只有正文，无标题" });
+
+  assert.equal(result.ok, true);
+  assertLossless(result);
+  assert.equal(result.data.appendedFromTitle, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+});
+
+test("onenote_append reports appendedFromTitle when markdown starts with '# Title'", async () => {
+  const bridge = fakeBridge(() => ({ pageId: "{PAGE}", appended: true, chunks: [] }));
+  const handlers = makeToolHandlers({ bridge });
+  const result = await handlers.onenote_append({ pageId: "{PAGE}", markdown: "# 标题\n\n正文" });
+
+  assert.equal(result.ok, true);
+  assertLossless(result);
+  assert.equal(result.data.appendedFromTitle, "标题");
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+});

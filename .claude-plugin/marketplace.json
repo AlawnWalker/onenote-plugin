@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "onenote-plugin",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "description": "Read and write the local OneNote desktop app via COM automation: pages, sections, search, Markdown import.",
       "author": {
         "name": "AlawnWalker"
