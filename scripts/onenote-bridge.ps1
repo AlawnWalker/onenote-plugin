@@ -16,6 +16,12 @@ $ErrorActionPreference = 'Stop'
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:NS = 'http://schemas.microsoft.com/office/onenote/2013/onenote'
 $script:App = $null
+# Column widths of the table being replaced by Action-Update; reused by
+# Convert-RowsToTableXml so a rewrite keeps the user's manual layout.
+$script:PreservedTableWidths = $null
+# <one:Size> of the outlines being replaced by Action-Update (document order);
+# Invoke-WritePageContent re-applies them so the block keeps the width.
+$script:PreservedOutlineSizes = $null
 
 function Fail([string]$code, [string]$message) {
     throw ('__DSH__' + $code + '|' + $message)
@@ -349,11 +355,19 @@ function Convert-RowsToTableXml($rows) {
         if ($n -gt $ncols) { $ncols = $n }
     }
     if ($ncols -eq 0) { return '' }
-    $width = [Math]::Round(680.0 / $ncols, 1)
+    # Reuse the replaced table's column widths when the column count is
+    # unchanged; otherwise fall back to equal widths (680pt total).
+    $widths = @()
+    if ($null -ne $script:PreservedTableWidths -and @($script:PreservedTableWidths).Count -eq $ncols) {
+        $widths = @($script:PreservedTableWidths)
+    } else {
+        $width = [Math]::Round(680.0 / $ncols, 1)
+        for ($i = 0; $i -lt $ncols; $i++) { $widths += $width }
+    }
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('<one:Table bordersVisible="true" hasHeaderRow="true"><one:Columns>')
     for ($i = 0; $i -lt $ncols; $i++) {
-        [void]$sb.Append('<one:Column index="' + $i + '" width="' + $width + '"/>')
+        [void]$sb.Append('<one:Column index="' + $i + '" width="' + $widths[$i] + '"/>')
     }
     [void]$sb.Append('</one:Columns>')
     foreach ($row in $rows) {
@@ -364,8 +378,14 @@ function Convert-RowsToTableXml($rows) {
             if ($i -lt $cells.Count -and $null -ne $cells[$i]) { $cell = [string]$cells[$i] }
             # OneNote entity-encodes ">" inside table cells and the entity shows up
             # verbatim when the page is read back, so write the full-width form.
-            $cell = $cell.Replace('>', [string][char]0xFF1E)
-            [void]$sb.Append('<one:Cell><one:OEChildren><one:OE><one:T>' + (ConvertTo-CData $cell) + '</one:T></one:OE></one:OEChildren></one:Cell>')
+            # "<br>" separates the lines of one cell: write one OE per line, or
+            # OneNote mangles the literal tag and drops the text around it.
+            [void]$sb.Append('<one:Cell><one:OEChildren>')
+            foreach ($part in ($cell -split '(?i)<br\s*/?>')) {
+                $line = $part.Replace('>', [string][char]0xFF1E)
+                [void]$sb.Append('<one:OE><one:T>' + (ConvertTo-CData $line) + '</one:T></one:OE>')
+            }
+            [void]$sb.Append('</one:OEChildren></one:Cell>')
         }
         [void]$sb.Append('</one:Row>')
     }
@@ -569,6 +589,15 @@ function Invoke-WritePageContent([string]$pageId, [string]$title, [object]$block
     if ($null -eq $sectionId) { $sectionId = '' }
     $script:BaseFontSize = Resolve-BaseFontSize $pageId $sectionId
     $outlines = Convert-BlocksToOutlineXmls $blocks
+    # Re-apply the replaced page's outline sizes; the index-wise mapping keeps
+    # chunked pages intact, and an index without a stored size stays auto.
+    if ($null -ne $script:PreservedOutlineSizes) {
+        for ($i = 0; $i -lt $outlines.Count; $i++) {
+            if ($i -lt @($script:PreservedOutlineSizes).Count -and $script:PreservedOutlineSizes[$i] -ne '') {
+                $outlines[$i] = $outlines[$i].Replace('<one:Outline>', '<one:Outline>' + $script:PreservedOutlineSizes[$i])
+            }
+        }
+    }
     if ($outlines.Count -eq 0) {
         if (($null -ne $title -and $title -ne '') -or $settings -ne '') {
             $patch = New-PagePatchXml $pageId $title '' $settings
@@ -598,7 +627,7 @@ function Convert-TableToBlock($table) {
         foreach ($cell in $row.SelectNodes('./*[local-name()="Cell"]')) {
             $texts = @()
             foreach ($t in $cell.SelectNodes('.//*[local-name()="T"]')) { $texts += $t.InnerText }
-            [void]$cells.Add(($texts -join ' '))
+            [void]$cells.Add(($texts -join '<br>'))
         }
         [void]$rows.Add(@($cells))
     }
@@ -1108,10 +1137,29 @@ function Action-Update($params) {
     $app.GetPageContent($pageId, [ref]$xml, 0)
     $doc = New-XmlDoc $xml
     $nm = New-NsMgr $doc
+
+    # Remember the existing table's column widths so the rewritten table keeps
+    # the user's manual layout (Convert-RowsToTableXml reuses them).
+    $script:PreservedTableWidths = @()
+    $oldTable = $doc.SelectSingleNode('//*[local-name()="Table"]')
+    if ($null -ne $oldTable) {
+        foreach ($col in $oldTable.SelectNodes('./*[local-name()="Columns"]/*[local-name()="Column"]')) {
+            $w = $col.GetAttribute('width')
+            if ($w -ne '') {
+                try { $script:PreservedTableWidths += [double]$w } catch { }
+            }
+        }
+    }
+
+    # Keep each outline's <one:Size> (width/height/isSetByUser) so the rewrite
+    # does not fall back to OneNote's automatic layout.
+    $script:PreservedOutlineSizes = @()
     $outlineIds = @()
     foreach ($outline in $doc.SelectNodes('//one:Page/one:Outline', $nm)) {
         $oid = $outline.GetAttribute('objectID')
         if ($oid -ne '') { $outlineIds += $oid }
+        $size = $outline.SelectSingleNode('./one:Size', $nm)
+        if ($null -ne $size) { $script:PreservedOutlineSizes += $size.OuterXml } else { $script:PreservedOutlineSizes += '' }
     }
     foreach ($oid in $outlineIds) {
         $app.DeletePageContent($pageId, $oid, 0, $true)
@@ -1120,6 +1168,8 @@ function Action-Update($params) {
     if ($null -ne $params.title) { $title = [string]$params.title }
     $pageColor = [string]$params.pageColor
     $chunks = Invoke-WritePageContent $pageId $title $params.blocks $pageColor $params.pageSize ''
+    $script:PreservedTableWidths = $null
+    $script:PreservedOutlineSizes = $null
     return [ordered]@{
         pageId          = $pageId
         updated         = $true
