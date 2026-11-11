@@ -1,6 +1,6 @@
 {
   "name": "onenote-plugin",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Local Microsoft OneNote desktop tools for Claude Code (MCP) and DSH (native Cordis): list/read/search/create/update/append/edit/publish/delete pages and sections.",
   "type": "module",
   "main": "server.js",
