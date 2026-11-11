@@ -140,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `onenote_create` | `sectionId`/`sectionName`、`title`、`markdown` | 建页；标题也可由 markdown 的 `# 标题` 提供 |
 | `onenote_update` | 页面定位 + `title?` + `markdown` | 改写已有页：删掉原文本 Outline 后写新内容 |
 | `onenote_append` | 页面定位 + `markdown` | 页面末尾追加一个 Outline |
-| `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；只重发该 block 所在的 Outline，其余内容与格式不动 |
+| `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；`find` 默认子串匹配，`exact=true` 要求整块文本相等；`deleteBlock` 会连带删除嵌套子块 |
 | `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等；目标扩展名会按格式归一化（`format=html` 写 `.htm`） |
 | `onenote_delete` | 页面定位 + `permanent?` | 删页，默认进回收站 |
 | `onenote_create_section` | `path`（.one 绝对路径）、`keepBlankPage?` | 建/打开独立分区；新建时自动生成的空白页会删掉，`keepBlankPage=true` 保留 |
@@ -180,6 +180,8 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 7. 长 ASCII 图会被页宽折行（默认 A4 竖排正文宽 468pt ≈ 61 半角字符/行）。
 8. **独立分区既不能改名也不能删除**：`UpdateHierarchy` 和 `DeleteHierarchy` 对独立 `.one` 分区都返回 `0x8004200B SECTION_READ_ONLY`；笔记本内的分区可改名。要移除独立分区只能删 `.one` 文件后重启 OneNote。
 9. **新建分区会自带一个空白页**：`onenote_create_section` 默认删除它（仅当分区只有这一页且无正文时），`keepBlankPage=true` 可保留。
+10. **`deleteBlock` 会连带删除嵌套子块**：删除一个标题（如 h3）时，其下缩进的 bullet/段落作为子块一并消失；需要保留就先删除或移走子块，或用 objectId 精确删除目标块。
+11. **独立分区要出现在 `onenote_list` 里，需要登记到 `extraSections`**：`onenote_create_section` 打开的分区会在当前进程内自动登记，立即可见；跨重启仍需写进 `ONENOTE_EXTRASECTIONS` 或 profile 的 `extraSections`。
 
 ## 导入 markdown 文件（按章节拆页）
 

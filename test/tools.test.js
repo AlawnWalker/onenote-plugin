@@ -308,3 +308,51 @@ test("onenote_append reports appendedFromTitle when markdown starts with '# Titl
   assert.equal(result.data.appendedFromTitle, "标题");
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
 });
+
+test("onenote_create_section registers the opened section for later list calls", async () => {
+  const bridge = fakeBridge((action) => {
+    if (action === "createsection") {
+      return { sectionId: "{SEC}", path: "C:\\Notes\\Quick.one", created: true, blankPageRemoved: false };
+    }
+    if (action === "list") return { notebooks: [], localSections: [], counts: {}, truncated: false };
+    return {};
+  });
+  bridge.extraSections = [];
+  const handlers = makeToolHandlers({ bridge });
+
+  const created = await handlers.onenote_create_section({ path: "C:\\Notes\\Quick.one" });
+  assert.equal(created.ok, true);
+  assert.equal(bridge.extraSections.length, 1);
+  assert.deepEqual(bridge.extraSections[0], { name: "Quick", path: "C:\\Notes\\Quick.one", id: "{SEC}" });
+
+  await handlers.onenote_create_section({ path: "C:/Notes/Quick.one" });
+  assert.equal(bridge.extraSections.length, 1, "re-opening the same section must not duplicate it");
+
+  await handlers.onenote_list({ includePages: false });
+  const listCall = bridge.calls.find((call) => call.action === "list");
+  assert.ok(listCall, "list was invoked");
+});
+
+test("onenote_edit forwards exact matching to the bridge", async () => {
+  const bridge = fakeBridge(() => ({ pageId: "{PAGE}", changed: 1, applied: true }));
+  const handlers = makeToolHandlers({ bridge });
+  const result = await handlers.onenote_edit({
+    pageId: "{PAGE}",
+    mode: "replaceText",
+    find: "beta",
+    exact: true,
+    search: "beta",
+    replacement: "BETA",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(bridge.calls[0].params.find, "beta");
+  assert.equal(bridge.calls[0].params.exact, true);
+});
+
+test("onenote_edit defaults exact matching to false", async () => {
+  const bridge = fakeBridge(() => ({ pageId: "{PAGE}", changed: 1, applied: true }));
+  const handlers = makeToolHandlers({ bridge });
+  await handlers.onenote_edit({ pageId: "{PAGE}", mode: "deleteBlock", find: "beta" });
+  assert.equal(bridge.calls[0].params.exact, false);
+});

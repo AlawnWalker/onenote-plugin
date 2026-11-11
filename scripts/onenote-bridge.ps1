@@ -1159,6 +1159,8 @@ function Action-Edit($params) {
     if ($null -ne $params.objectId) { $objectId = [string]$params.objectId }
     $find = ''
     if ($null -ne $params.find) { $find = [string]$params.find }
+    $exact = $false
+    if ($null -ne $params.exact) { $exact = [bool]$params.exact }
     if ($objectId -eq '' -and $find -eq '') {
         Fail 'BAD_ARGUMENT' 'objectId or find is required (onenote_read with withIds=true gives objectIds)'
     }
@@ -1177,11 +1179,16 @@ function Action-Edit($params) {
         if ($null -eq $target) { Fail 'NOT_FOUND' ('no outline element with objectID ' + $objectId) }
     } else {
         # Target by text: unique match required, so a partial edit can never hit
-        # the wrong paragraph.
+        # the wrong paragraph. Substring by default; exact=true compares the
+        # whole trimmed block text (ordinal, case-sensitive).
         $hits = @()
         foreach ($cand in $doc.SelectNodes('//one:OE', $nm)) {
             $text = Get-DirectText $cand
-            if ($text -ne '' -and $text.Contains($find)) { $hits += $cand }
+            if ($exact) {
+                if ([string]::Equals($text.Trim(), $find.Trim(), [StringComparison]::Ordinal)) { $hits += $cand }
+            } elseif ($text -ne '' -and $text.Contains($find)) {
+                $hits += $cand
+            }
         }
         if ($hits.Count -eq 0) { Fail 'NOT_FOUND' ('no block contains: ' + $find) }
         if ($hits.Count -gt 1) { Fail 'AMBIGUOUS' ('find matches ' + $hits.Count + ' blocks; use objectId instead') }
