@@ -1,5 +1,5 @@
 /**
- * onenote-plugin â€” DSH/Cordis adapter.
+ * onenote-plugin â€?DSH/Cordis adapter.
  *
  * Thin host layer over the shared core in ../lib. It registers the same 11
  * tools the MCP adapter exposes, but through the DSH author DSL so DSH can
@@ -11,7 +11,7 @@ import { TOOL_NAMES, TOOL_DESCRIPTIONS, toDshParameters } from "../lib/schemas.j
 import { normalizeConfig } from "../lib/config.js";
 
 export const name = "onenote-plugin";
-export const version = "0.6.5";
+export const version = "0.6.6";
 export const inject = ["tools"];
 
 export const OUTPUT = Object.freeze({

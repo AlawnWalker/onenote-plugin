@@ -236,14 +236,18 @@ function ConvertTo-Attr([string]$value) {
 # Heading paragraphs are real formatted paragraphs: font size plus paragraph
 # spacing. Only the ASCII style string is used (no font-family) so this script
 # stays ASCII-only; OneNote merges the size into the page's default font.
-# Sizes are RELATIVE to the body size (see Resolve-BaseFontSize): h3 = base + 2,
-# h2 = base + 4, so a 12pt notebook gets 14/16 while a 10pt one gets 12/14.
+# Sizes are RELATIVE to the body size (see Resolve-BaseFontSize) and are
+# configurable (`headingDelta: [h2, h3]`, default [2, 1]): a 12pt notebook gets
+# 14/13 by default. Older pages were written with [4, 2] (16/14); read-back
+# recognises both candidate sizes.
 $script:HeadingSpace = @{
     h2 = @{ before = '8.0'; after = '5.0' }
     h3 = @{ before = '5.0'; after = '5.0' }
 }
-$script:HeadingDelta = @{ h2 = 4; h3 = 2 }
+$script:HeadingDelta = @{ h2 = 2; h3 = 1 }
 $script:BaseFontSize = 12.0
+# List bullet glyph size: 0 = follow the body size; > 0 = explicit pt.
+$script:BulletFontSize = 0.0
 
 function Format-PtSize([double]$value) {
     return ('{0:0.0}pt' -f $value)
@@ -420,10 +424,11 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
         $bulletDepth = $depth
         if ($null -ne $node.level) { $bulletDepth = [int]$node.level }
         $levelBullet = Get-BulletValueForLevel $bulletDepth
+        $bulletSizeXml = Format-PtSize $(if ($script:BulletFontSize -gt 0) { $script:BulletFontSize } else { $script:BaseFontSize })
         if ($type -eq 'bullet') {
-            $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="11.0"/></one:List>'
+            $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="' + $bulletSizeXml + '"/></one:List>'
         } elseif ($type -eq 'number') {
-            $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="11.0"/></one:List>'
+            $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="' + $bulletSizeXml + '"/></one:List>'
             $ordinal = 1
             if ($null -ne $node.ordinal -and "$($node.ordinal)" -ne '') { $ordinal = [int]$node.ordinal }
             $text = "$ordinal. " + $text
@@ -657,10 +662,20 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 if (Test-OeIsCode $child) {
                     $kind = 'code'
                 } elseif ($text -ne '') {
-                    # Formatted headings written by this plugin sit above the body
-                    # size: h3 = base + 2, h2 = base + 4.
+                    # Formatted headings written by this plugin sit at
+                    # base + headingDelta; pages written by older versions used
+                    # base + 4 / base + 2. Accept both candidate sizes, then fall
+                    # back to the legacy thresholds for anything in between.
                     $size = Get-OeFontSize $child
-                    if ($size -ge ($script:BaseFontSize + 3)) { $kind = 'h2' }
+                    $h2s = @(($script:BaseFontSize + [double]$script:HeadingDelta['h2']), ($script:BaseFontSize + 4.0))
+                    $h3s = @(($script:BaseFontSize + [double]$script:HeadingDelta['h3']), ($script:BaseFontSize + 2.0))
+                    $isH2 = $false
+                    $isH3 = $false
+                    foreach ($cand in $h2s) { if ([math]::Abs($size - $cand) -lt 0.26) { $isH2 = $true } }
+                    foreach ($cand in $h3s) { if ([math]::Abs($size - $cand) -lt 0.26) { $isH3 = $true } }
+                    if ($isH2) { $kind = 'h2' }
+                    elseif ($isH3) { $kind = 'h3' }
+                    elseif ($size -ge ($script:BaseFontSize + 3)) { $kind = 'h2' }
                     elseif ($size -ge ($script:BaseFontSize + 1)) { $kind = 'h3' }
                 }
             }
@@ -1498,6 +1513,7 @@ try {
     $script:BulletValue = '1'
     $script:BulletValues = @()
     $script:NestUnderHeadings = $false
+    $script:BulletFontSize = 0.0
     if ($null -ne $payload.params -and $null -ne $payload.params.nestUnderHeadings) {
         $script:NestUnderHeadings = [bool]$payload.params.nestUnderHeadings
     }
@@ -1510,6 +1526,22 @@ try {
             if ($vals.Count -gt 0) {
                 $script:BulletValues = @($vals | ForEach-Object { [string]$_ })
                 $script:BulletValue = $script:BulletValues[0]
+            }
+        }
+        # Heading sizes are relative to the body: headingDelta = [h2, h3].
+        if ($null -ne $payload.params.headingDelta) {
+            $hd = $payload.params.headingDelta
+            if ($null -ne $hd.h2) { try { $script:HeadingDelta['h2'] = [double]$hd.h2 } catch { } }
+            if ($null -ne $hd.h3) { try { $script:HeadingDelta['h3'] = [double]$hd.h3 } catch { } }
+        }
+        # Bullet glyph size: "body" (default) follows the body size, a number is pt.
+        if ($null -ne $payload.params.bulletFontSize) {
+            $bf = ([string]$payload.params.bulletFontSize).Trim()
+            if ($bf -ne '' -and $bf.ToLower() -ne 'body') {
+                try {
+                    $v = [double]$bf
+                    if ($v -gt 0) { $script:BulletFontSize = $v }
+                } catch { }
             }
         }
     }

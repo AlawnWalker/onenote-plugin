@@ -87,6 +87,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `ONENOTE_ALIGN_COMMENT_MAX` | `80` | `auto` 对齐的列上限 |
 | `ONENOTE_BULLET_VALUE` | `1` | OneNote 项目符号字形索引（0 大黑圆、1 实心点 U+2022、3 空心圆、7 菱形） |
 | `ONENOTE_BULLET_VALUES` | `[]` | JSON 数组，按层级指定字形，如 `[20, 2]`；最后一项重复 |
+| `ONENOTE_HEADING_DELTA` | `[2, 1]` | 标题字号相对正文的增量 `[h2, h3]`（也接受 `{"h2":2,"h3":1}`）；旧版页面写的 `[4, 2]` 仍能正确读回 |
+| `ONENOTE_BULLET_FONT_SIZE` | `body` | 项目符号字号：`body` 跟随正文字号，或填具体 pt（如 `12`） |
 | `ONENOTE_NEST_UNDER_HEADINGS` | 空（关） | `1`/`true` 把标题后的内容按层级缩进（DSH 原生索引） |
 | `ONENOTE_INDENTED_CHILDREN` | 空（关） | `1`/`true` 把列表项后的缩进行当作子段落 |
 | `ONENOTE_EXTRASECTIONS` | `[]` | JSON 数组。**独立分区必须按 `path` 记**（ID 每次重启会变），如 `[{"name":"快速笔记","path":"<你的路径>\\快速笔记.one"}]` |
@@ -123,6 +125,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
     alignCommentMax: 80
     pageColor: '#C7EDCC'
     bulletValues: [20, 2]
+    headingDelta: [2, 1]
+    bulletFontSize: 'body'
     nestUnderHeadings: true
     indentedChildren: true
     extraSections:
@@ -155,8 +159,8 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 | Markdown | 写入 OneNote | 读回 |
 |---|---|---|
 | `# 标题` | 页面标题（真 Title） | `# 标题` |
-| `## 标题` | 真字号段落：正文 +4pt，段前 8pt / 段后 5pt | `## 标题` |
-| `### 标题` | 真字号段落：正文 +2pt，段前 5pt / 段后 5pt | `### 标题` |
+| `## 标题` | 真字号段落：正文 + `headingDelta[0]`（默认 +2pt），段前 8pt / 段后 5pt | `## 标题` |
+| `### 标题` | 真字号段落：正文 + `headingDelta[1]`（默认 +1pt），段前 5pt / 段后 5pt | `### 标题` |
 | `> 引用` | `▎ 引用` 段落 | `> 引用` |
 | ``` 代码块 | 每行一个代码段落（正文尺寸 + Consolas；`codePrefix` 非空时再加强制前缀） | 代码块（语言标记丢失；`codePrefix=''` 也能靠字体识别） |
 | `- 项` / 缩进 | 真项目符号列表 | 缩进还原 |
@@ -165,7 +169,14 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 
 **正文基准字号**按这个顺序解析：目标页面自己的正文样式（`QuickStyleDef name="p"`，其次取出现最多的字号）→ 同分区取样（≤5 页）→ 注册表 `DefaultFontSize`（只读）→ 回落 12pt。`onenote_create` 的返回里带 `baseFontSize`，便于确认本次基准。
 
-读回时按「相对正文的字号差」识别标题：≥ 正文+3 认 `##`，≥ 正文+1 认 `###`；旧版本写的 `━━━ 标题 ━━━`、`▌ 标题` 仍然兼容读成 `##`/`###`。代码块在标题判定之前按 Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码行不会被误判成 `##`。
+读回时按「相对正文的字号差」识别标题：优先匹配 `正文+headingDelta`（默认 +2/+1）与旧版
+`正文+4/+2` 两套候选字号，再回退到 `≥正文+3` 认 `##`、`≥正文+1` 认 `###`；旧版本写的
+`━━━ 标题 ━━━`、`▌ 标题` 仍然兼容读成 `##`/`###`。代码块在标题判定之前按
+Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码行不会被误判成 `##`。
+
+> 手工在 OneNote 里改过字体/样式的块不会被插件"归一化"：插件只按配置写**新生成**的内容，
+> `onenote_update` 会整页重写、自然归一；`onenote_append` 只追加，既有块保持原样。
+> 需要统一时用 `onenote_read` + `onenote_update` 重刷一遍。
 
 `onenote_read(withIds=true)` 的模型可见输出会在末尾附 `blocks (objectId):` 列表（CC 与 DSH 均生效），可直接把其中的 `objectId` 交给 `onenote_edit`。
 
