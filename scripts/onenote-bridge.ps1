@@ -61,7 +61,7 @@ $script:HResultMap = @{
     '80042015' = @{ code = 'NOTEBOOK_NOT_FOUND'; hint = 'the notebook does not exist' }
     '80042018' = @{ code = 'GROUP_NOT_FOUND'; hint = 'the section group/folder does not exist' }
     '80042019' = @{ code = 'INVALID_QUERY'; hint = 'the query is invalid' }
-    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path â€” the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
+    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path â€?the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
     '8004201B' = @{ code = 'SECTION_LOCKED'; hint = 'the section is encrypted and locked' }
     '8004201C' = @{ code = 'DISABLED_BY_POLICY'; hint = 'the action is disabled by policy' }
     '80042020' = @{ code = 'INVALID_XML_SCHEMA'; hint = 'the OneNote XML schema is invalid' }
@@ -424,7 +424,8 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
         $bulletDepth = $depth
         if ($null -ne $node.level) { $bulletDepth = [int]$node.level }
         $levelBullet = Get-BulletValueForLevel $bulletDepth
-        $bulletSizeXml = Format-PtSize $(if ($script:BulletFontSize -gt 0) { $script:BulletFontSize } else { $script:BaseFontSize })
+        # one:Bullet fontSize takes a bare number, not "Npt".
+        $bulletSizeXml = '{0:0.0}' -f $(if ($script:BulletFontSize -gt 0) { $script:BulletFontSize } else { $script:BaseFontSize })
         if ($type -eq 'bullet') {
             $listXml = '<one:List><one:Bullet bullet="' + $levelBullet + '" fontSize="' + $bulletSizeXml + '"/></one:List>'
         } elseif ($type -eq 'number') {
