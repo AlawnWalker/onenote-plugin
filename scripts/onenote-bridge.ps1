@@ -1875,6 +1875,7 @@ function Action-InsertImage($params) {
     # Resolve the anchor block (objectId wins over text).
     $anchor = $null
     $anchorId = ''
+    $anchorFromText = $false
     if ($null -ne $params.objectId -and "$($params.objectId)" -ne '') {
         $wantId = [string]$params.objectId
         foreach ($cand in $doc.SelectNodes('//one:OE', $nm)) {
@@ -1891,6 +1892,7 @@ function Action-InsertImage($params) {
         if ($hits.Count -eq 0) { Fail 'NOT_FOUND' ('no block contains: ' + $needle) }
         if ($hits.Count -gt 1) { Fail 'AMBIGUOUS' ('find matches ' + $hits.Count + ' blocks; use objectId instead') }
         $anchor = $hits[0]
+        $anchorFromText = $true
     }
     if ($null -ne $anchor) { $anchorId = $anchor.GetAttribute('objectID') }
 
@@ -1925,7 +1927,23 @@ function Action-InsertImage($params) {
         } elseif ($position -eq 'before') {
             [void]$cloneAnchor.ParentNode.InsertBefore($newNode, $cloneAnchor)
         } else {
-            [void]$cloneAnchor.ParentNode.InsertAfter($newNode, $cloneAnchor)
+            $insertAfter = $cloneAnchor
+            if ($anchorFromText) {
+                # Text anchors are usually a heading/paragraph that gets several
+                # pictures. Step over the media already sitting right behind it
+                # so repeated "after this paragraph" calls line up in call order
+                # instead of pushing the previous picture down each time. An
+                # objectId anchor stays strict: insert right next to that block.
+                $probe = $cloneAnchor.NextSibling
+                while ($null -ne $probe) {
+                    if ($probe.NodeType -eq 'Element') {
+                        if ($probe.LocalName -ne 'OE' -or $null -eq (Get-OeMediaInfo $probe)) { break }
+                        $insertAfter = $probe
+                    }
+                    $probe = $probe.NextSibling
+                }
+            }
+            [void]$insertAfter.ParentNode.InsertAfter($newNode, $insertAfter)
         }
     }
 

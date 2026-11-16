@@ -148,7 +148,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `onenote_update` | 页面定位 + `title?` + `markdown` + `preserveMedia?` + `backup?` | 改写已有页：删掉原文本 Outline 后写新内容；**图片/墨迹/附件自动原样搬回**（按原锚点段落就近放，锚点没了就放末尾），并把旧页 XML 备份后返回 `backupPath` |
 | `onenote_append` | 页面定位 + `markdown` | 页面末尾追加一个 Outline |
 | `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；`find` 默认子串匹配，`exact=true` 要求整块文本相等；`deleteBlock` 会连带删除嵌套子块 |
-| `onenote_insert_image` | 页面定位 + `path` + `width?` + `objectId?`/`find?` + `position?` | 往**已有页面**插一张本地图片：锚点块之后/之前或页尾；只重写锚点所在的 Outline，其余块不动；插入前备份页面 |
+| `onenote_insert_image` | 页面定位 + `path` + `width?` + `objectId?`/`find?` + `position?` | 往**已有页面**插一张本地图片：锚点块之后/之前或页尾；只重写锚点所在的 Outline，其余块不动；插入前备份页面。文本锚点连续插入时按调用顺序排在已有图之后，`objectId` 锚点则紧贴该块（0.7.3） |
 | `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等；目标扩展名会按格式归一化（`format=html` 写 `.htm`） |
 | `onenote_delete` | 页面定位 + `permanent?` + `backup?` | 删页，默认进回收站；删之前把整页 XML（含图片）备份，返回 `backupPath` |
 | `onenote_create_section` | `path`（.one 绝对路径）、`keepBlankPage?` | 建/打开独立分区；新建时自动生成的空白页会删掉，`keepBlankPage=true` 保留 |
@@ -256,6 +256,13 @@ pci_host_probe()                    // probe.c:3143
 
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
+
+### 0.7.3：同一锚点连续插图按调用顺序排列
+
+`onenote_insert_image` 用文本锚点（`find`）时，如果锚点后面已经有图，新图会**排到那组图的末尾**；用 `objectId` 锚点则保持严格语义（紧贴该块插入）。这样同一个段落下连续插 3 张图，顺序就是调用顺序，不用倒着插。
+
+- 文本锚点：`find:"锚点段落"` 连续插 100/200/300 → 页面顺序 100,200,300
+- 块锚点：`objectId:<尾部段落>` + `position:"after"` → 仍然紧贴该段落
 
 ### 0.7.2：回归里发现的 4 个问题
 
