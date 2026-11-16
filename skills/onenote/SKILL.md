@@ -26,6 +26,7 @@ app on Windows via COM automation**. It works on the real local notebooks and
 | `onenote_update` | Rewrite an existing page from Markdown |
 | `onenote_append` | Append an outline to a page |
 | `onenote_edit` | Edit one block in place (`replaceText` / `replaceBlock` / `insertAfter` / `deleteBlock`) |
+| `onenote_insert_image` | Insert a local image file at an anchor block or at the end of a page |
 | `onenote_publish` | Export a page to `.one` / `.pdf` / `.docx` / `.html` / ... |
 | `onenote_delete` | Delete a page (recycle bin by default) |
 | `onenote_create_section` | Create or open a standalone `.one` section |
@@ -38,16 +39,23 @@ Page locator: `pageId` first; otherwise `sectionId`/`sectionName` plus
 
 1. Use `onenote_list` to find the target section/page.
 2. Read before rewriting: `onenote_update` replaces all text outlines on the
-   page, so capture anything the user wants preserved first.
-3. Confirm with the user before `onenote_delete` or a destructive
+   page. Images/ink/attachments are carried over automatically
+   (`preserveMedia`, default on) but land near their old anchor paragraph, not
+   at a pixel-exact position; a copy of the old page is written to the backup
+   directory first (`backupPath` in the result).
+3. Check `revision` (content hash) from `onenote_read` to prove a write landed:
+   OneNote's own `lastModifiedTime` does not advance for API writes.
+4. Confirm with the user before `onenote_delete` or a destructive
    `onenote_update`.
-4. For chaptered Markdown import, use `dev/import-md.mjs` (one page per `##`
+5. For chaptered Markdown import, use `dev/import-md.mjs` (one page per `##`
    chapter) instead of creating pages one by one.
 
 ## Markdown subset
 
 `#` title, `##`/`###` headings (real font sizes), bullets, numbered lists
-(stored as bullet + number), tables, fenced code (language tag lost), quotes.
+(stored as bullet + number), tables, fenced code (language tag lost), quotes,
+and images as a standalone `![alt](D:\local\pic.png)` line (`![560](pic.png)`
+sets the width in points; `ONENOTE_IMAGE_MAX_WIDTH` caps the default).
 Inline bold/italic/code/links are stripped. `onenote_update` applies the
 configured page background.
 
@@ -64,6 +72,11 @@ serialized as JSON.
   `.one` sections. Standalone sections are invisible to `onenote_list` unless
   added here; they cannot be renamed or deleted through COM.
 - `ONENOTE_TIMEOUT_MS` — per-call timeout, default 180000.
+- `ONENOTE_BACKUP_DIR` — where destructive tools copy the page XML first
+  (default `%TEMP%\onenote-plugin-backups`).
+- `ONENOTE_PRESERVE_MEDIA` — `0` makes `onenote_update` drop images/ink on
+  purpose; default keeps them.
+- `ONENOTE_IMAGE_MAX_WIDTH` — default image width in points (600).
 
 ## Known limitations
 
@@ -77,3 +90,9 @@ serialized as JSON.
   SECTION_READ_ONLY`); remove the file and restart OneNote instead.
 - `onenote_create_section` may leave one blank page; the tool deletes it when
   the section is otherwise empty.
+- Recycled (deleted) pages cannot be read back or restored through COM
+  (`0x80042014`); `onenote_read` returns `PAGE_DELETED`. Recover from the
+  `backupPath` the destructive tools return.
+- `lastModifiedTime` stays stale after API writes; use `revision` instead.
+- `UpdatePageContent` merge rules: omitting a whole outline keeps it, omitting
+  an OE *inside a re-sent outline* deletes that OE.

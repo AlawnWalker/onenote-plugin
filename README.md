@@ -2,7 +2,7 @@
 
 一个 **多宿主 OneNote 插件**：同一份核心同时支持 **Claude Code（stdio MCP）** 与 **DSH（原生 Cordis）**，直接读写本机 **Microsoft OneNote 桌面版**（COM 自动化），操作的是真实本地笔记本（含 `.one` 分区文件），不是云端的 Graph 副本。
 
-- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
+- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_insert_image` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
 - 依赖：仅 `@modelcontextprotocol/server`；运行时还需要 Windows PowerShell 5.1（`powershell.exe`）+ 本机 OneNote
 - 架构：每次工具调用 → 写 `req.json` → spawn `powershell.exe` 跑 `scripts/onenote-bridge.ps1`（COM）→ 读 `res.json`（§13 A 方案）
 
@@ -92,6 +92,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `ONENOTE_NEST_UNDER_HEADINGS` | 空（关） | `1`/`true` 把标题后的内容按层级缩进（DSH 原生索引） |
 | `ONENOTE_INDENTED_CHILDREN` | 空（关） | `1`/`true` 把列表项后的缩进行当作子段落 |
 | `ONENOTE_EXTRASECTIONS` | `[]` | JSON 数组。**独立分区必须按 `path` 记**（ID 每次重启会变），如 `[{"name":"快速笔记","path":"<你的路径>\\快速笔记.one"}]` |
+| `ONENOTE_BACKUP_DIR` | 空（`%TEMP%\onenote-plugin-backups`） | `onenote_update` / `onenote_delete` / `onenote_insert_image` 动页面之前，先把整页 XML（含图片 base64）写到这个目录；返回里带 `backupPath` |
+| `ONENOTE_PRESERVE_MEDIA` | `1` | `onenote_update` 重写 Outline 时把图片/墨迹/附件搬回去；`0` 明确丢图（会写 warning） |
+| `ONENOTE_IMAGE_MAX_WIDTH` | `600` | markdown 图片未写宽度时的默认宽度（pt），超宽图按此等比缩小 |
 
 ### 用户配置文件（插件启动器）
 
@@ -139,14 +142,15 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | 工具 | 关键参数 | 说明 |
 |---|---|---|
 | `onenote_list` | `notebook?` `section?` `includePages?` `includeRecycleBin?` `maxSections?` `maxPages?` | 笔记本 → 分区 → 页面树，返回所有 ID |
-| `onenote_read` | `pageId` 或 `sectionId`/`sectionName` + `pageTitle`、`maxBlocks?`、`withIds?` | 读页面，转 Markdown；`withIds=true` 在模型可见输出末尾附 `blocks (objectId)` 列表（CC 与 DSH 均生效，供 `onenote_edit` 用） |
+| `onenote_read` | `pageId` 或 `sectionId`/`sectionName` + `pageTitle`、`maxBlocks?`、`withIds?` | 读页面，转 Markdown；`withIds=true` 在模型可见输出末尾附 `blocks (objectId)` 列表（CC 与 DSH 均生效，供 `onenote_edit` 用）。返回 `images`（类型/宽高/objectId）、`media` 计数和 `revision`（页面 XML 的 SHA-1 前 16 位）——判断"页面到底变没变"要看 `revision`，别信 `lastModified`（见限制 13） |
 | `onenote_search` | `query` `scopeId?` `limit?` `includeContent?` `maxScan?` | 自扫层级；标题子串（快），`includeContent=true` 再扫正文（约 50ms/页） |
 | `onenote_create` | `sectionId`/`sectionName`、`title`、`markdown` | 建页；标题也可由 markdown 的 `# 标题` 提供 |
-| `onenote_update` | 页面定位 + `title?` + `markdown` | 改写已有页：删掉原文本 Outline 后写新内容 |
+| `onenote_update` | 页面定位 + `title?` + `markdown` + `preserveMedia?` + `backup?` | 改写已有页：删掉原文本 Outline 后写新内容；**图片/墨迹/附件自动原样搬回**（按原锚点段落就近放，锚点没了就放末尾），并把旧页 XML 备份后返回 `backupPath` |
 | `onenote_append` | 页面定位 + `markdown` | 页面末尾追加一个 Outline |
 | `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；`find` 默认子串匹配，`exact=true` 要求整块文本相等；`deleteBlock` 会连带删除嵌套子块 |
+| `onenote_insert_image` | 页面定位 + `path` + `width?` + `objectId?`/`find?` + `position?` | 往**已有页面**插一张本地图片：锚点块之后/之前或页尾；只重写锚点所在的 Outline，其余块不动；插入前备份页面 |
 | `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等；目标扩展名会按格式归一化（`format=html` 写 `.htm`） |
-| `onenote_delete` | 页面定位 + `permanent?` | 删页，默认进回收站 |
+| `onenote_delete` | 页面定位 + `permanent?` + `backup?` | 删页，默认进回收站；删之前把整页 XML（含图片）备份，返回 `backupPath` |
 | `onenote_create_section` | `path`（.one 绝对路径）、`keepBlankPage?` | 建/打开独立分区；新建时自动生成的空白页会删掉，`keepBlankPage=true` 保留 |
 | `onenote_rename_section` | `sectionId` 或 `path`、`name` | 改分区名；**独立分区只读**（`0x8004200B`），笔记本内分区可改 |
 
@@ -165,6 +169,7 @@ OneNote 2024 的 `UpdatePageContent` 拒绝 `one:Style`/`QuickStyles`/`quickStyl
 | ``` 代码块 | 每行一个代码段落（正文尺寸 + Consolas；`codePrefix` 非空时再加强制前缀） | 代码块（语言标记丢失；`codePrefix=''` 也能靠字体识别） |
 | `- 项` / 缩进 | 真项目符号列表 | 缩进还原 |
 | `1. 项` | 项目符号 + 文本 `1. ` | `1. 项` |
+| `![说明](D:\本地\图.png)` | 真图片（OE + `one:Image`）；`![560](图.png)` 用 alt 位写宽度（pt） | `![图片]` 占位（OneNote 不回传文件路径） |
 | `\| 表格 \|` | 真 OneNote 表格 | Markdown 表格 |
 
 **正文基准字号**按这个顺序解析：目标页面自己的正文样式（`QuickStyleDef name="p"`，其次取出现最多的字号）→ 同分区取样（≤5 页）→ 注册表 `DefaultFontSize`（只读）→ 回落 12pt。`onenote_create` 的返回里带 `baseFontSize`，便于确认本次基准。
@@ -183,7 +188,7 @@ Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码�
 ## 已知限制
 
 1. 编号列表只能用「圆点 + 序号」（`one:Number` 报 `0x80042001`，`bullet="0"` 报 `0x80042000`）。
-2. `onenote_update` 会删掉页面内所有文本 Outline（含其中图片/墨迹），页面级独立图片保留。
+2. `onenote_update` 会删掉页面内所有文本 Outline；其中的图片/墨迹/附件由插件**自动搬回**（`preserveMedia`，默认开），但**位置是近似的**：按原锚点段落就近放，锚点文本被改写就落到页尾。需要像素级精确位置时用 `onenote_edit` 原地改，不要整页重写。
 3. 代码块语言标记（```js 的 `js`）无法保存。
 4. 首次调用慢：OneNote 没跑时 COM 会拉起它并同步，可能 1–3 分钟，超时重试即可。
 5. COM 需要非沙箱：OneNote 的 COM 服务器在文件沙箱里以 `0x80080005 (CO_E_SERVER_EXEC_FAILURE)` 失败。
@@ -193,6 +198,9 @@ Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码�
 9. **新建分区会自带一个空白页**：`onenote_create_section` 默认删除它（仅当分区只有这一页且无正文时），`keepBlankPage=true` 可保留。
 10. **`deleteBlock` 会连带删除嵌套子块**：删除一个标题（如 h3）时，其下缩进的 bullet/段落作为子块一并消失；需要保留就先删除或移走子块，或用 objectId 精确删除目标块。
 11. **独立分区要出现在 `onenote_list` 里，需要登记到 `extraSections`**：`onenote_create_section` 打开的分区会在当前进程内自动登记，立即可见；跨重启仍需写进 `ONENOTE_EXTRASECTIONS` 或 profile 的 `extraSections`。
+12. **回收站页读不了、也恢复不了**：`DeleteHierarchy(permanent=false)` 之后，该 pageId 在 COM 里就已经不可见（`GetPageContent` → `0x80042014`，`onenote_read` 返回 `PAGE_DELETED`），`GetHierarchy` 也列不出；本机实测笔记本与独立分区都一样，而且 COM 没有 undelete。**唯一恢复途径是插件自己的备份**：`onenote_delete` / `onenote_update` / `onenote_insert_image` 会在动页面之前写一份整页 XML（含图片 base64）到 `backupDir`，返回里的 `backupPath` 就是它。
+13. **`lastModifiedTime` 对 API 写入不生效**：`UpdatePageContent` 改完内容后，页面属性里的 `lastModifiedTime` 仍是旧值（实测创建后一直是创建时间，等多久都不变，切换页面/保存也不刷新）。判断是否真的改了页面请看 `onenote_read` 返回的 `revision`（页面 XML 的 SHA-1 前 16 位），`onenote_update` 也会返回写完后的 `revision`。
+14. **`UpdatePageContent` 的删除语义**（实测，容易搞反）：patch 里**整段省略某个 Outline** → 该 Outline **不删**；patch 里带上某个 Outline（`objectID` 相同）但**省略其中的 OE** → 被省略的 OE **会删**。所以「整页重写」用 `DeletePageContent` + 新建，`onenote_edit` 用「重发所属 Outline 的完整内容」。
 
 ## 导入 markdown 文件（按章节拆页）
 
@@ -248,6 +256,19 @@ pci_host_probe()                    // probe.c:3143
 
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
+
+### 0.7.0：图片不再被静默删除，能插图了
+
+这一版处理 5 个实测问题（来自 Harness lead 的现场报告）：
+
+1. **`onenote_update` 不再静默删图**：重写前把整页 XML（含图片 base64）备份到 `backupDir`，返回 `backupPath`；重写后把原来的图片/墨迹/附件从备份里取出来重新插回，优先放回原锚点段落旁边，锚点文本没了放末尾。返回 `preservedMedia` 列表（类型/宽高/锚点/落点）和 `mediaCount`；万一没插全，`warnings` 会明说，备份里仍是完整的。要明确丢图就传 `preserveMedia: false`。
+2. **新增 `onenote_insert_image`**：往已有页面插一张本地图片，可指定锚点块（`objectId` 或唯一 `find` 文本）、`after`/`before`/`end`、宽度（pt，等比缩放）。只重写锚点所在 Outline，页面其余部分不动；插入前同样备份。
+3. **markdown 支持图片**：`onenote_create` / `onenote_update` / `onenote_append` 都能写独立一行的 `![说明](D:\本地\图.png)`；`![560](图.png)` 用 alt 位指定宽度，`ONENOTE_IMAGE_MAX_WIDTH`（默认 600pt）管默认宽度。文件不存在时写入 `[missing image] 路径` 占位并在 `warnings` 里报，不会让整页失败。
+4. **`onenote_read` 报告图片**：`images` 数组（类型/宽/高/objectId/outlineId）+ `media` 计数 + markdown 里的 `![图片]` 占位；配合 `revision` 可以在 update 前后做丢失检测。
+5. **`lastModified` 不再误导**：实测 OneNote 的 `lastModifiedTime` 对 `UpdatePageContent` 不刷新（始终是创建时间）。新增 `revision`（页面 XML 的 SHA-1 前 16 位），才是可靠的"页面变没变"判据。
+6. **删除/回收站**：`onenote_delete` 删之前先备份整页 XML（含图片），返回 `backupPath`；删除后再读该页会得到明确的 `PAGE_DELETED`（而不是含糊的 `OBJECT_NOT_FOUND`）。实测 OneNote 回收站里的页 **COM 既读不到也恢复不了**（`0x80042014`，`GetHierarchy` 也不列），所以插件自己的备份就是唯一退路。
+
+顺带实测澄清一条容易被搞反的语义（写进限制 14）：`UpdatePageContent` 里**整段省略一个 Outline 不会删除它**，但**带上该 Outline 却省略其中某个 OE，那个 OE 会删**。
 
 ### 0.6.8：段落字号与代码识别修复
 

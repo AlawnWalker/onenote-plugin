@@ -22,6 +22,19 @@ $script:PreservedTableWidths = $null
 # <one:Size> of the outlines being replaced by Action-Update (document order);
 # Invoke-WritePageContent re-applies them so the block keeps the width.
 $script:PreservedOutlineSizes = $null
+# Where destructive actions drop a copy of the page XML (update / delete) so a
+# wrong call can always be undone outside OneNote. Empty = %TEMP% default.
+$script:BackupDir = ''
+# Action-Update keeps images/ink/attachments by default; set false to drop them.
+$script:PreserveMedia = $true
+# Upper bound (pt) for images written from markdown when no width is given.
+$script:ImageMaxWidth = 600.0
+# Non-fatal notes collected while rendering (missing image files, dropped
+# media, ...). Returned as `warnings` instead of failing the whole page.
+$script:Warnings = New-Object System.Collections.ArrayList
+# OneNote media elements one:OE can carry. Read-back reports them, and
+# Action-Update carries them over the outline rewrite.
+$script:MediaTags = @('Image', 'InkDrawing', 'InkParagraph', 'InsertedFile', 'MediaFile')
 
 function Fail([string]$code, [string]$message) {
     throw ('__DSH__' + $code + '|' + $message)
@@ -61,7 +74,7 @@ $script:HResultMap = @{
     '80042015' = @{ code = 'NOTEBOOK_NOT_FOUND'; hint = 'the notebook does not exist' }
     '80042018' = @{ code = 'GROUP_NOT_FOUND'; hint = 'the section group/folder does not exist' }
     '80042019' = @{ code = 'INVALID_QUERY'; hint = 'the query is invalid' }
-    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path �?the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
+    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path - the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
     '8004201B' = @{ code = 'SECTION_LOCKED'; hint = 'the section is encrypted and locked' }
     '8004201C' = @{ code = 'DISABLED_BY_POLICY'; hint = 'the action is disabled by policy' }
     '80042020' = @{ code = 'INVALID_XML_SCHEMA'; hint = 'the OneNote XML schema is invalid' }
@@ -237,6 +250,276 @@ function ConvertTo-CData([string]$text) {
 function ConvertTo-Attr([string]$value) {
     if ($null -eq $value) { return '' }
     return $value.Replace('&', '&amp;').Replace('"', '&quot;').Replace('<', '&lt;').Replace('>', '&gt;')
+}
+
+# ---------------------------------------------------------------------------
+# Backups, media (images / ink / attachments) and image files
+# ---------------------------------------------------------------------------
+
+function Get-BackupDir {
+    if ($script:BackupDir -ne '') { return $script:BackupDir }
+    return (Join-Path $env:TEMP 'onenote-plugin-backups')
+}
+
+# Write a copy of the page XML before a destructive action. Returns the path, or
+# '' when the copy could not be written (the action still runs: a full disk must
+# not block a delete the caller asked for).
+function Save-PageBackup([string]$pageId, [string]$reason, [string]$xml) {
+    try {
+        $dir = Get-BackupDir
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        }
+        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss-fff')
+        $short = ($pageId -replace '[^0-9A-Za-z]', '')
+        if ($short.Length -gt 24) { $short = $short.Substring(0, 24) }
+        $target = Join-Path $dir ($stamp + '-' + $reason + '-' + $short + '.xml')
+        [IO.File]::WriteAllText($target, $xml, (New-Object System.Text.UTF8Encoding($false)))
+        return $target
+    } catch {
+        return ''
+    }
+}
+
+function Add-Warning([string]$text) {
+    [void]$script:Warnings.Add($text)
+}
+
+function Get-OeMediaInfo($oe) {
+    foreach ($tag in $script:MediaTags) {
+        $node = $oe.SelectSingleNode('./*[local-name()="' + $tag + '"]')
+        if ($null -eq $node) { continue }
+        $kind = 'image'
+        if ($tag -eq 'InkDrawing' -or $tag -eq 'InkParagraph') { $kind = 'ink' }
+        elseif ($tag -eq 'InsertedFile' -or $tag -eq 'MediaFile') { $kind = 'file' }
+        $width = 0.0
+        $height = 0.0
+        $size = $node.SelectSingleNode('./*[local-name()="Size"]')
+        if ($null -ne $size) {
+            try { $width = [double]$size.GetAttribute('width') } catch { }
+            try { $height = [double]$size.GetAttribute('height') } catch { }
+        }
+        return [ordered]@{ type = $kind; tag = $tag; width = $width; height = $height }
+    }
+    return $null
+}
+
+# Detached, page-independent copy of a media OE: metadata and the page-local
+# binary handles (CallbackID / OCRData) are dropped so the element can be sent
+# to a different page without confusing OneNote.
+function Get-PortableMediaXml($oe) {
+    $clone = $oe.CloneNode($true)
+    $volatile = @('objectID', 'author', 'authorInitials', 'authorResolutionID',
+        'lastModifiedBy', 'lastModifiedByInitials', 'lastModifiedByResolutionID',
+        'creationTime', 'lastModifiedTime')
+    $stack = New-Object System.Collections.Stack
+    $stack.Push($clone)
+    while ($stack.Count -gt 0) {
+        $node = $stack.Pop()
+        if ($node.NodeType -ne 'Element') { continue }
+        foreach ($attr in $volatile) {
+            if ($node.HasAttribute($attr)) { [void]$node.RemoveAttribute($attr) }
+        }
+        for ($i = $node.ChildNodes.Count - 1; $i -ge 0; $i--) {
+            $child = $node.ChildNodes[$i]
+            if ($child.NodeType -eq 'Element' -and ($child.LocalName -eq 'CallbackID' -or $child.LocalName -eq 'OCRData')) {
+                [void]$node.RemoveChild($child)
+            }
+        }
+        foreach ($child in $node.ChildNodes) {
+            if ($child.NodeType -eq 'Element') { $stack.Push($child) }
+        }
+    }
+    return $clone.OuterXml
+}
+
+# Media elements of a page in document order, each with the text of the closest
+# preceding paragraph (the anchor used to put it back in the same place).
+function Get-MediaItems($doc) {
+    $nm = New-NsMgr $doc
+    $items = New-Object System.Collections.ArrayList
+    $outlineIndex = -1
+    foreach ($outline in $doc.SelectNodes('//one:Page/one:Outline', $nm)) {
+        $outlineIndex++
+        $lastText = ''
+        foreach ($oe in $outline.SelectNodes('.//one:OE', $nm)) {
+            $info = Get-OeMediaInfo $oe
+            if ($null -ne $info) {
+                [void]$items.Add([ordered]@{
+                    xml          = (Get-PortableMediaXml $oe)
+                    type         = [string]$info.type
+                    width        = [double]$info.width
+                    height       = [double]$info.height
+                    anchor       = $lastText
+                    outlineIndex = $outlineIndex
+                })
+                continue
+            }
+            $text = Get-DirectText $oe
+            if ($text -ne '') { $lastText = $text }
+        }
+    }
+    return ,$items
+}
+
+function Find-OutlineIndexByText($outlines, $nm, [string]$text) {
+    if ($text -eq '') { return -1 }
+    for ($i = 0; $i -lt $outlines.Count; $i++) {
+        foreach ($oe in $outlines[$i].SelectNodes('.//one:OE', $nm)) {
+            if ((Get-DirectText $oe) -eq $text) { return $i }
+        }
+    }
+    return -1
+}
+
+# Put media OEs back after the text rewrite. Each item goes to the outline that
+# still holds its anchor paragraph, else to the last outline; items with no
+# outline at all land in a fresh one.
+function Add-MediaToPage([string]$pageId, $items) {
+    $list = @($items)
+    if ($list.Count -eq 0) { return ,@() }
+    $app = Get-App
+    $xml = ''
+    $app.GetPageContent($pageId, [ref]$xml, 0)
+    $doc = New-XmlDoc $xml
+    $nm = New-NsMgr $doc
+    $outlines = @($doc.SelectNodes('//one:Page/one:Outline', $nm))
+    $placed = New-Object System.Collections.ArrayList
+
+    if ($outlines.Count -eq 0) {
+        $body = ''
+        foreach ($item in $list) { $body += [string]$item.xml }
+        $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '"><one:Outline><one:OEChildren>' + $body + '</one:OEChildren></one:Outline></one:Page>'
+        $app.UpdatePageContent($patch, 0)
+        foreach ($item in $list) {
+            [void]$placed.Add([ordered]@{ type = $item.type; width = $item.width; height = $item.height; anchor = $item.anchor; placed = 'new-outline' })
+        }
+        return ,@($placed)
+    }
+
+    # Map every item to one outline, then send one patch per outline.
+    $plan = @{}
+    foreach ($item in $list) {
+        $target = Find-OutlineIndexByText $outlines $nm ([string]$item.anchor)
+        if ($target -lt 0) { $target = $outlines.Count - 1 }
+        if (-not $plan.ContainsKey($target)) { $plan[$target] = New-Object System.Collections.ArrayList }
+        [void]$plan[$target].Add($item)
+    }
+    foreach ($target in @($plan.Keys | Sort-Object)) {
+        $clone = $outlines[$target].CloneNode($true)
+        $container = $clone.SelectSingleNode('./*[local-name()="OEChildren"]')
+        if ($null -eq $container) {
+            $container = $doc.CreateElement('one', 'OEChildren', $script:NS)
+            [void]$clone.AppendChild($container)
+        }
+        foreach ($item in $plan[$target]) {
+            $wrapper = New-XmlDoc ('<one:Outline xmlns:one="' + $script:NS + '"><one:OEChildren>' + [string]$item.xml + '</one:OEChildren></one:Outline>')
+            # Put the media back next to the paragraph it followed before the
+            # rewrite; the anchor is only the outline fallback when that text is
+            # gone.
+            $anchorNode = $null
+            if ([string]$item.anchor -ne '') {
+                foreach ($cand in $clone.SelectNodes('.//*[local-name()="OE"]')) {
+                    if ((Get-DirectText $cand) -eq [string]$item.anchor) { $anchorNode = $cand; break }
+                }
+            }
+            foreach ($node in @($wrapper.DocumentElement.SelectNodes('./*[local-name()="OEChildren"]/*[local-name()="OE"]'))) {
+                $imported = $doc.ImportNode($node, $true)
+                if ($null -ne $anchorNode) {
+                    [void]$anchorNode.ParentNode.InsertAfter($imported, $anchorNode)
+                    $anchorNode = $imported
+                } else {
+                    [void]$container.AppendChild($imported)
+                }
+            }
+            [void]$placed.Add([ordered]@{
+                type   = $item.type
+                width  = $item.width
+                height = $item.height
+                anchor = $item.anchor
+                placed = $(if ($null -ne $anchorNode) { 'after anchor' } else { 'outline ' + $target + ' (end)' })
+            })
+        }
+        $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '">' + $clone.OuterXml + '</one:Page>'
+        $app.UpdatePageContent($patch, 0)
+        Start-Sleep -Milliseconds 300
+    }
+    return ,@($placed)
+}
+
+# Pixel dimensions of a PNG/JPEG/GIF/BMP file; 0x0 when unknown.
+function Get-ImagePixelSize([string]$path) {
+    try {
+        $bytes = [IO.File]::ReadAllBytes($path)
+    } catch {
+        return @(0, 0)
+    }
+    if ($null -eq $bytes -or $bytes.Length -lt 26) { return @(0, 0) }
+    # PNG: signature then IHDR width/height (big endian).
+    if ($bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) {
+        $w = ([int64]$bytes[16] -shl 24) -bor ([int64]$bytes[17] -shl 16) -bor ([int64]$bytes[18] -shl 8) -bor [int64]$bytes[19]
+        $h = ([int64]$bytes[20] -shl 24) -bor ([int64]$bytes[21] -shl 16) -bor ([int64]$bytes[22] -shl 8) -bor [int64]$bytes[23]
+        return @([int]$w, [int]$h)
+    }
+    # GIF: 'GIF8' then little-endian width/height.
+    if ($bytes[0] -eq 0x47 -and $bytes[1] -eq 0x49 -and $bytes[2] -eq 0x46) {
+        return @(([int]$bytes[6] + ([int]$bytes[7] -shl 8)), ([int]$bytes[8] + ([int]$bytes[9] -shl 8)))
+    }
+    # BMP: 40-byte header, little-endian width/height at 18/22.
+    if ($bytes[0] -eq 0x42 -and $bytes[1] -eq 0x4D) {
+        return @(([int]$bytes[18] + ([int]$bytes[19] -shl 8)), ([int]$bytes[22] + ([int]$bytes[23] -shl 8)))
+    }
+    # JPEG: walk the markers looking for a start-of-frame segment.
+    if ($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xD8) {
+        $i = 2
+        while ($i -lt $bytes.Length - 9) {
+            if ($bytes[$i] -ne 0xFF) { $i++; continue }
+            $marker = [int]$bytes[$i + 1]
+            if ($marker -eq 0xD8 -or $marker -eq 0xD9 -or ($marker -ge 0xD0 -and $marker -le 0xD7) -or $marker -eq 0x01) { $i += 2; continue }
+            $len = ([int]$bytes[$i + 2] -shl 8) + [int]$bytes[$i + 3]
+            if ($marker -ge 0xC0 -and $marker -le 0xCF -and $marker -ne 0xC4 -and $marker -ne 0xC8 -and $marker -ne 0xCC) {
+                $h = ([int]$bytes[$i + 5] -shl 8) + [int]$bytes[$i + 6]
+                $w = ([int]$bytes[$i + 7] -shl 8) + [int]$bytes[$i + 8]
+                return @($w, $h)
+            }
+            if ($len -le 0) { break }
+            $i += 2 + $len
+        }
+    }
+    return @(0, 0)
+}
+
+# Build the one:OE that embeds an image file. Width in points; the height keeps
+# the aspect ratio. Returns '' (and records a warning) when the file is unusable.
+function Get-ImageOeFromFile([string]$path, $requestedWidth) {
+    if ($path -eq '') {
+        Add-Warning 'image block without a source path'
+        return ''
+    }
+    $full = $path.Trim().Replace('/', '\')
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        Add-Warning ('image file not found: ' + $full)
+        return ''
+    }
+    $pixels = Get-ImagePixelSize $full
+    $pw = [double]$pixels[0]
+    $ph = [double]$pixels[1]
+    if ($pw -le 0 -or $ph -le 0) { $pw = 480.0; $ph = 320.0 }
+    $width = 0.0
+    if ($null -ne $requestedWidth) {
+        try { $width = [double]$requestedWidth } catch { $width = 0.0 }
+    }
+    if ($width -le 0) { $width = [Math]::Min($pw, $script:ImageMaxWidth) }
+    $height = [Math]::Round($width * $ph / $pw, 1)
+    try {
+        $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($full))
+    } catch {
+        Add-Warning ('cannot read image file: ' + $full)
+        return ''
+    }
+    $oeId = '{' + [guid]::NewGuid().ToString().ToUpper() + '}{1}{B0}'
+    $imgId = '{' + [guid]::NewGuid().ToString().ToUpper() + '}{2}{B0}'
+    return '<one:OE objectID="' + $oeId + '" alignment="left"><one:Image objectID="' + $imgId + '"><one:Size width="' + $width + '" height="' + $height + '"/><one:Data>' + $b64 + '</one:Data></one:Image></one:OE>'
 }
 
 # ---------------------------------------------------------------------------
@@ -427,6 +710,19 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             }
             continue
         }
+        if ($type -eq 'image') {
+            # Markdown `![alt](path)`: the file is read here (the bridge runs on
+            # the same machine as the page), so the model never has to move
+            # base64 through the host.
+            $imageXml = Get-ImageOeFromFile ([string]$node.src) $node.width
+            if ($imageXml -ne '') {
+                [void]$sb.Append($imageXml)
+            } else {
+                $note = '[missing image] ' + [string]$node.src
+                [void]$sb.Append('<one:OE><one:T>' + (ConvertTo-CData $note) + '</one:T></one:OE>')
+            }
+            continue
+        }
         $text = [string]$node.text
         $listXml = ''
         # Blocks carry the level they had in the markdown source; fall back to the
@@ -490,6 +786,8 @@ function Convert-BlocksToOutline([object]$blocks) {
             text     = [string]$block.text
             ordinal  = $block.ordinal
             rows     = $block.rows
+            src      = $block.src
+            width    = $block.width
             level    = 0
             children = (New-Object System.Collections.ArrayList)
         }
@@ -697,6 +995,21 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 }
             }
             $table = $child.SelectSingleNode('./*[local-name()="Table"]')
+            # Images, ink and attachments live inside their own OE and carry no
+            # text: report them so a caller can see that the page has media
+            # (and so a read/update round trip can prove nothing was lost).
+            $media = Get-OeMediaInfo $child
+            if ($null -ne $media) {
+                [void]$out.Add([ordered]@{
+                    type      = [string]$media.type
+                    text      = ''
+                    level     = $level
+                    objectId  = $oid
+                    outlineId = $script:CurrentOutlineId
+                    width     = [double]$media.width
+                    height    = [double]$media.height
+                })
+            }
             if ($null -ne $table) {
                 $tableBlock = Convert-TableToBlock $table
                 $tableBlock['objectId'] = $oid
@@ -1022,7 +1335,20 @@ function Action-List($params) {
 function Action-Read($params) {
     $pageId = Resolve-PageId $params
     $xml = ''
-    (Get-App).GetPageContent($pageId, [ref]$xml, 1)
+    try {
+        # piBasic (0): everything except the binary payloads. Images still show
+        # up as one:Image/one:Size, which is all read-back needs, and a page
+        # with big pictures stays cheap to read.
+        (Get-App).GetPageContent($pageId, [ref]$xml, 0)
+    } catch {
+        # PowerShell wraps the COM failure: the OneNote HRESULT is on an inner
+        # exception, so walk the chain instead of reading HResult directly.
+        $hex = Get-DeepHResult $_.Exception
+        if ($hex -eq '80042014' -or $hex -eq '80042005') {
+            Fail 'PAGE_DELETED' ('page not found or in the recycle bin: ' + $pageId + '. OneNote COM cannot read or restore recycled pages; restore it in the OneNote UI, or rebuild it from the backupPath that onenote_update / onenote_delete returned')
+        }
+        throw
+    }
     $doc = New-XmlDoc $xml
     $converted = Convert-PageXmlToBlocks $doc
     $blocks = @($converted.blocks)
@@ -1032,13 +1358,42 @@ function Action-Read($params) {
         $blocks = @($blocks[0..($maxBlocks - 1)])
         $blocks += [ordered]@{ type = 'note'; text = ('... ' + $maxBlocks + ' of ' + $converted.blocks.Count + ' blocks shown (truncated)'); level = 0 }
     }
+    # Media inventory: what a caller must not lose when rewriting the page, and
+    # the only way to notice that a rewrite dropped a picture.
+    $images = New-Object System.Collections.ArrayList
+    $inkCount = 0
+    $fileCount = 0
+    foreach ($block in $converted.blocks) {
+        $kind = [string]$block.type
+        if ($kind -eq 'ink') { $inkCount++ }
+        elseif ($kind -eq 'file') { $fileCount++ }
+        if ($kind -eq 'image' -or $kind -eq 'ink' -or $kind -eq 'file') {
+            [void]$images.Add([ordered]@{
+                type      = $kind
+                width     = $block.width
+                height    = $block.height
+                objectId  = $block.objectId
+                outlineId = $block.outlineId
+            })
+        }
+    }
+    # OneNote's own lastModifiedTime does not advance for API writes (verified:
+    # UpdatePageContent changes the content while the attribute keeps the page
+    # creation time), so a content hash is the reliable change detector.
+    $sha = [System.Security.Cryptography.SHA1]::Create()
+    $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($xml))
+    $revision = ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+    if ($revision.Length -gt 16) { $revision = $revision.Substring(0, 16) }
     return [ordered]@{
         pageId       = $pageId
         title        = $converted.title
         lastModified = $doc.DocumentElement.GetAttribute('lastModifiedTime')
+        revision     = $revision
         blockCount   = $converted.blocks.Count
         truncated    = ($blocks.Count -gt 0 -and $converted.blocks.Count -gt $blocks.Count)
         blocks       = $blocks
+        images       = @($images)
+        media        = [ordered]@{ images = ($images.Count - $inkCount - $fileCount); ink = $inkCount; files = $fileCount; total = $images.Count }
     }
 }
 
@@ -1127,7 +1482,7 @@ function Action-Create($params) {
     $pageId = $null
     (Get-App).CreateNewPage($sectionId, [ref]$pageId, 0)
     $chunks = Invoke-WritePageContent $pageId $title $params.blocks $pageColor $params.pageSize $sectionId
-    return [ordered]@{ pageId = $pageId; title = $title; sectionId = $sectionId; chunks = $chunks; pageColor = $pageColor; baseFontSize = $script:BaseFontSize }
+    return [ordered]@{ pageId = $pageId; title = $title; sectionId = $sectionId; chunks = $chunks; pageColor = $pageColor; baseFontSize = $script:BaseFontSize; warnings = @($script:Warnings) }
 }
 
 function Action-Append($params) {
@@ -1136,7 +1491,7 @@ function Action-Append($params) {
     if ($null -ne $params.title) { $title = [string]$params.title }
     $pageColor = [string]$params.pageColor
     $chunks = Invoke-WritePageContent $pageId $title $params.blocks $pageColor $params.pageSize ''
-    return [ordered]@{ pageId = $pageId; appended = $true; chunks = $chunks }
+    return [ordered]@{ pageId = $pageId; appended = $true; chunks = $chunks; warnings = @($script:Warnings) }
 }
 
 # Page-level settings only (background color and/or page size) - content untouched.
@@ -1166,9 +1521,26 @@ function Action-Update($params) {
     $pageId = Resolve-PageId $params
     $app = Get-App
     $xml = ''
-    $app.GetPageContent($pageId, [ref]$xml, 0)
+    # piBinaryData (1): the image/attachment payloads must travel with the
+    # backup and with the media that is re-inserted after the text rewrite.
+    $app.GetPageContent($pageId, [ref]$xml, 1)
     $doc = New-XmlDoc $xml
     $nm = New-NsMgr $doc
+
+    # Always keep a copy of the page before the outlines are deleted: OneNote's
+    # own recycle bin is not readable through COM, so this file is the only way
+    # back. A failed backup never blocks the update the caller asked for.
+    $backupPath = ''
+    $wantBackup = $true
+    if ($null -ne $params.backup) { $wantBackup = [bool]$params.backup }
+    if ($wantBackup) { $backupPath = Save-PageBackup $pageId 'update' $xml }
+
+    # Media preservation: capture images / ink / attachments (with their anchor
+    # text) before the outlines that own them are deleted.
+    $mediaItems = New-Object System.Collections.ArrayList
+    $preserveMedia = $script:PreserveMedia
+    if ($null -ne $params.preserveMedia) { $preserveMedia = [bool]$params.preserveMedia }
+    if ($preserveMedia) { $mediaItems = Get-MediaItems $doc }
 
     # Remember the existing table's column widths so the rewritten table keeps
     # the user's manual layout (Convert-RowsToTableXml reuses them).
@@ -1202,11 +1574,54 @@ function Action-Update($params) {
     $chunks = Invoke-WritePageContent $pageId $title $params.blocks $pageColor $params.pageSize ''
     $script:PreservedTableWidths = $null
     $script:PreservedOutlineSizes = $null
+
+    # Put the media back and verify it actually landed on the page.
+    $preserved = @()
+    if ($mediaItems.Count -gt 0) {
+        if ($preserveMedia) {
+            $preserved = Add-MediaToPage $pageId $mediaItems
+            # OneNote applies the patch asynchronously; give it a moment before
+            # deciding that a picture did not make it back.
+            $landed = 0
+            for ($attempt = 0; $attempt -lt 5; $attempt++) {
+                Start-Sleep -Milliseconds 350
+                $check = ''
+                try { $app.GetPageContent($pageId, [ref]$check, 0) } catch { $check = '' }
+                if ($check -eq '') { continue }
+                $landedItems = Get-MediaItems (New-XmlDoc $check)
+                $landed = $landedItems.Count
+                if ($landed -ge $mediaItems.Count) { break }
+            }
+            if ($landed -lt $mediaItems.Count) {
+                Add-Warning ('restored ' + $landed + ' of ' + $mediaItems.Count + ' media items; the page copy from the backup still has all of them')
+            }
+        } else {
+            Add-Warning ('preserveMedia=false: ' + $mediaItems.Count + ' media item(s) were removed by this update')
+            foreach ($item in $mediaItems) {
+                [void]$preserved.Add([ordered]@{ type = $item.type; width = $item.width; height = $item.height; anchor = $item.anchor; placed = 'dropped' })
+            }
+        }
+    }
+    $after = ''
+    $revision = ''
+    try {
+        $app.GetPageContent($pageId, [ref]$after, 0)
+    } catch { $after = '' }
+    if ($after -ne '') {
+        $sha = [System.Security.Cryptography.SHA1]::Create()
+        $revision = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($after)))).Replace('-', '').ToLowerInvariant()
+        if ($revision.Length -gt 16) { $revision = $revision.Substring(0, 16) }
+    }
     return [ordered]@{
         pageId          = $pageId
         updated         = $true
         removedOutlines = $outlineIds.Count
         chunks          = $chunks
+        backupPath      = $backupPath
+        preservedMedia  = @($preserved)
+        mediaCount      = $mediaItems.Count
+        revision        = $revision
+        warnings        = @($script:Warnings)
     }
 }
 
@@ -1378,12 +1793,147 @@ function Action-Edit($params) {
     }
 }
 
+# Insert one image file into an existing page. The target is an anchor block
+# (objectId or unique text) or the end of the page; only the outline that owns
+# the anchor is re-sent, so the rest of the page is untouched.
+function Action-InsertImage($params) {
+    $pageId = Resolve-PageId $params
+    $path = ''
+    if ($null -ne $params.path) { $path = [string]$params.path }
+    if ($path -eq '') { Fail 'BAD_ARGUMENT' 'path is required (absolute path of a local image file)' }
+    $path = $path.Trim().Replace('/', '\')
+    if (-not [IO.Path]::IsPathRooted($path)) { Fail 'BAD_ARGUMENT' 'path must be absolute' }
+
+    $requestedWidth = $null
+    if ($null -ne $params.width) { $requestedWidth = $params.width }
+    $oeXml = Get-ImageOeFromFile $path $requestedWidth
+    if ($oeXml -eq '') { Fail 'IMAGE_NOT_FOUND' ('cannot read image file: ' + $path) }
+    $newId = [regex]::Match($oeXml, 'objectID="([^"]+)"').Groups[1].Value
+    $sizeMatch = [regex]::Match($oeXml, '<one:Size width="([^"]+)" height="([^"]+)"')
+    $widthValue = $sizeMatch.Groups[1].Value
+    $heightValue = $sizeMatch.Groups[2].Value
+
+    $app = Get-App
+    $xml = ''
+    $app.GetPageContent($pageId, [ref]$xml, 1)
+    $doc = New-XmlDoc $xml
+    $nm = New-NsMgr $doc
+
+    $backupPath = ''
+    $wantBackup = $true
+    if ($null -ne $params.backup) { $wantBackup = [bool]$params.backup }
+    if ($wantBackup) { $backupPath = Save-PageBackup $pageId 'insertimage' $xml }
+
+    $wrapperXml = '<one:Outline xmlns:one="' + $script:NS + '"><one:OEChildren>' + $oeXml + '</one:OEChildren></one:Outline>'
+    $outlines = @($doc.SelectNodes('//one:Page/one:Outline', $nm))
+
+    if ($outlines.Count -eq 0) {
+        $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '"><one:Outline><one:OEChildren>' + $oeXml + '</one:OEChildren></one:Outline></one:Page>'
+        $app.UpdatePageContent($patch, 0)
+        return [ordered]@{
+            pageId = $pageId; objectId = $newId; width = $widthValue; height = $heightValue
+            position = 'new-outline'; path = $path; backupPath = $backupPath; warnings = @($script:Warnings)
+        }
+    }
+
+    # Resolve the anchor block (objectId wins over text).
+    $anchor = $null
+    $anchorId = ''
+    if ($null -ne $params.objectId -and "$($params.objectId)" -ne '') {
+        $wantId = [string]$params.objectId
+        foreach ($cand in $doc.SelectNodes('//one:OE', $nm)) {
+            if ($cand.GetAttribute('objectID') -eq $wantId) { $anchor = $cand; break }
+        }
+        if ($null -eq $anchor) { Fail 'NOT_FOUND' ('no block with objectID ' + $wantId) }
+    } elseif ($null -ne $params.find -and "$($params.find)" -ne '') {
+        $needle = [string]$params.find
+        $hits = @()
+        foreach ($cand in $doc.SelectNodes('//one:OE', $nm)) {
+            $text = Get-DirectText $cand
+            if ($text -ne '' -and $text.Contains($needle)) { $hits += $cand }
+        }
+        if ($hits.Count -eq 0) { Fail 'NOT_FOUND' ('no block contains: ' + $needle) }
+        if ($hits.Count -gt 1) { Fail 'AMBIGUOUS' ('find matches ' + $hits.Count + ' blocks; use objectId instead') }
+        $anchor = $hits[0]
+    }
+    if ($null -ne $anchor) { $anchorId = $anchor.GetAttribute('objectID') }
+
+    $position = 'after'
+    if ($null -ne $params.position -and "$($params.position)" -ne '') { $position = ([string]$params.position).ToLower() }
+
+    if ($null -eq $anchor) {
+        # No anchor: append to the last outline.
+        $owner = $outlines[$outlines.Count - 1]
+        $clone = $owner.CloneNode($true)
+        $container = $clone.SelectSingleNode('./*[local-name()="OEChildren"]')
+        if ($null -eq $container) {
+            $container = $doc.CreateElement('one', 'OEChildren', $script:NS)
+            [void]$clone.AppendChild($container)
+        }
+        $newNode = $doc.ImportNode((New-XmlDoc $wrapperXml).DocumentElement.SelectSingleNode('.//*[local-name()="OE"]'), $true)
+        [void]$container.AppendChild($newNode)
+        $position = 'end'
+    } else {
+        $owner = Get-OwnerOutline $anchor
+        if ($null -eq $owner) { Fail 'NOT_FOUND' 'anchor block has no owning outline' }
+        $clone = $owner.CloneNode($true)
+        $cloneAnchor = $null
+        foreach ($cand in $clone.SelectNodes('.//*[local-name()="OE"]')) {
+            if ($cand.GetAttribute('objectID') -eq $anchorId) { $cloneAnchor = $cand; break }
+        }
+        $newNode = $doc.ImportNode((New-XmlDoc $wrapperXml).DocumentElement.SelectSingleNode('.//*[local-name()="OE"]'), $true)
+        if ($null -eq $cloneAnchor) {
+            $container = $clone.SelectSingleNode('./*[local-name()="OEChildren"]')
+            [void]$container.AppendChild($newNode)
+            $position = 'end'
+        } elseif ($position -eq 'before') {
+            [void]$cloneAnchor.ParentNode.InsertBefore($newNode, $cloneAnchor)
+        } else {
+            [void]$cloneAnchor.ParentNode.InsertAfter($newNode, $cloneAnchor)
+        }
+    }
+
+    $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '">' + $clone.OuterXml + '</one:Page>'
+    $app.UpdatePageContent($patch, 0)
+    Start-Sleep -Milliseconds 300
+
+    return [ordered]@{
+        pageId     = $pageId
+        objectId   = $newId
+        width      = $widthValue
+        height     = $heightValue
+        position   = $position
+        anchorId   = $anchorId
+        path       = $path
+        backupPath = $backupPath
+        warnings   = @($script:Warnings)
+    }
+}
+
 function Action-Delete($params) {
     $pageId = Resolve-PageId $params
     $permanent = $false
     if ($null -ne $params.permanent) { $permanent = [bool]$params.permanent }
+    # Deleted pages cannot be read back through COM (0x80042014) and COM has no
+    # undelete, so keep the XML first: this file is the only recovery path.
+    $backupPath = ''
+    $wantBackup = $true
+    if ($null -ne $params.backup) { $wantBackup = [bool]$params.backup }
+    if ($wantBackup) {
+        try {
+            $xml = ''
+            (Get-App).GetPageContent($pageId, [ref]$xml, 1)
+            if ($xml -ne '') { $backupPath = Save-PageBackup $pageId 'delete' $xml }
+        } catch { $backupPath = '' }
+    }
     (Get-App).DeleteHierarchy($pageId, 0, $permanent)
-    return [ordered]@{ pageId = $pageId; deleted = $true; permanent = $permanent }
+    return [ordered]@{
+        pageId     = $pageId
+        deleted    = $true
+        permanent  = $permanent
+        backupPath = $backupPath
+        warnings   = @($script:Warnings)
+    }
 }
 
 function Action-Publish($params) {
@@ -1535,6 +2085,19 @@ try {
         $script:NestUnderHeadings = [bool]$payload.params.nestUnderHeadings
     }
     if ($null -ne $payload.params) {
+        # Backup + media switches (host config, overridable per call).
+        if ($null -ne $payload.params.backupDir) {
+            $script:BackupDir = ([string]$payload.params.backupDir).Trim()
+        }
+        if ($null -ne $payload.params.preserveMedia) {
+            $script:PreserveMedia = [bool]$payload.params.preserveMedia
+        }
+        if ($null -ne $payload.params.imageMaxWidth) {
+            try {
+                $mw = [double]$payload.params.imageMaxWidth
+                if ($mw -gt 0) { $script:ImageMaxWidth = $mw }
+            } catch { }
+        }
         if ($null -ne $payload.params.bulletValue) {
             $script:BulletValue = [string]$payload.params.bulletValue
         }
@@ -1573,6 +2136,7 @@ try {
         'update'  { $data = Action-Update $params }
         'append'  { $data = Action-Append $params }
         'edit'    { $data = Action-Edit $params }
+        'insertimage' { $data = Action-InsertImage $params }
         'delete'  { $data = Action-Delete $params }
         'setcolor' { $data = Action-SetColor $params }
         'setsettings' { $data = Action-SetSettings $params }
