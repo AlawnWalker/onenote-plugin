@@ -26,7 +26,7 @@ app on Windows via COM automation**. It works on the real local notebooks and
 | `onenote_update` | Rewrite an existing page from Markdown |
 | `onenote_append` | Append an outline to a page |
 | `onenote_edit` | Edit one block in place (`replaceText` / `replaceBlock` / `insertAfter` / `deleteBlock`) |
-| `onenote_insert_image` | Insert a local image file at an anchor block or at the end of a page (text anchors append after the images already there, `objectId` anchors insert strictly next to the block) |
+| `onenote_insert_image` | Insert a local image file at an anchor block or at the end of a page (text anchors append after the images already there, `objectId` anchors insert strictly next to the block, and a block that owns children gets the image after the whole subtree) |
 | `onenote_publish` | Export a page to `.one` / `.pdf` / `.docx` / `.html` / ... |
 | `onenote_delete` | Delete a page (recycle bin by default) |
 | `onenote_create_section` | Create or open a standalone `.one` section |
