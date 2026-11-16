@@ -61,7 +61,7 @@ $script:HResultMap = @{
     '80042015' = @{ code = 'NOTEBOOK_NOT_FOUND'; hint = 'the notebook does not exist' }
     '80042018' = @{ code = 'GROUP_NOT_FOUND'; hint = 'the section group/folder does not exist' }
     '80042019' = @{ code = 'INVALID_QUERY'; hint = 'the query is invalid' }
-    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path â€?the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
+    '8004201A' = @{ code = 'INVALID_TARGET_PATH'; hint = 'OneNote rejected the export path ï¿½?the extension must match the format (html -> .htm, mht -> .mht, docx -> .docx, pdf -> .pdf) and the directory must be writable' }
     '8004201B' = @{ code = 'SECTION_LOCKED'; hint = 'the section is encrypted and locked' }
     '8004201C' = @{ code = 'DISABLED_BY_POLICY'; hint = 'the action is disabled by policy' }
     '80042020' = @{ code = 'INVALID_XML_SCHEMA'; hint = 'the OneNote XML schema is invalid' }
@@ -176,6 +176,11 @@ function Get-OeFontSize($oe) {
     if ($oe.HasAttribute('style')) { [void]$styles.Add($oe.GetAttribute('style')) }
     foreach ($t in $oe.SelectNodes('./*[local-name()="T"]')) {
         if ($t.HasAttribute('style')) { [void]$styles.Add($t.GetAttribute('style')) }
+        # OneNote may move inline formatting into spans inside the CDATA (mixed
+        # CJK/ASCII runs); inspect the text so code detection still sees the
+        # monospace family and size.
+        $inner = [string]$t.InnerText
+        if ($inner -match 'font-(family|size):') { [void]$styles.Add($inner) }
     }
     foreach ($s in $styles) {
         $m = [regex]::Match([string]$s, 'font-size:\s*([0-9]+(?:\.[0-9]+)?)\s*pt')
@@ -192,6 +197,11 @@ function Get-OeFontFamily($oe) {
     if ($oe.HasAttribute('style')) { [void]$styles.Add($oe.GetAttribute('style')) }
     foreach ($t in $oe.SelectNodes('./*[local-name()="T"]')) {
         if ($t.HasAttribute('style')) { [void]$styles.Add($t.GetAttribute('style')) }
+        # OneNote may move inline formatting into spans inside the CDATA (mixed
+        # CJK/ASCII runs); inspect the text so code detection still sees the
+        # monospace family and size.
+        $inner = [string]$t.InnerText
+        if ($inner -match 'font-(family|size):') { [void]$styles.Add($inner) }
     }
     foreach ($s in $styles) {
         $m = [regex]::Match([string]$s, 'font-family:\s*([^;"]+)')
@@ -435,6 +445,12 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             $text = "$ordinal. " + $text
         }
         $headingXml = ''
+        if ($type -eq 'para' -or $type -eq 'bullet' -or $type -eq 'number') {
+            # Pin body/list paragraphs to the resolved body size: a child nested
+            # under a heading would otherwise inherit the heading's larger font and
+            # be mistaken for another heading on read-back.
+            $headingXml = ' style="font-size:' + (Format-PtSize $script:BaseFontSize) + '"'
+        }
         if ($script:HeadingDelta.ContainsKey($type)) {
             $delta = [int]$script:HeadingDelta[$type]
             $space = $script:HeadingSpace[$type]
