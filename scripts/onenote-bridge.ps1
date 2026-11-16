@@ -412,32 +412,42 @@ function Add-MediaToPage([string]$pageId, $items) {
             $container = $doc.CreateElement('one', 'OEChildren', $script:NS)
             [void]$clone.AppendChild($container)
         }
+        # Several media items can share one anchor (two pictures under the same
+        # paragraph). Remember the last node inserted for each anchor so the
+        # second one lands behind the first instead of in front of it.
+        $lastInserted = @{}
         foreach ($item in $plan[$target]) {
             $wrapper = New-XmlDoc ('<one:Outline xmlns:one="' + $script:NS + '"><one:OEChildren>' + [string]$item.xml + '</one:OEChildren></one:Outline>')
             # Put the media back next to the paragraph it followed before the
             # rewrite; the anchor is only the outline fallback when that text is
             # gone.
+            $key = [string]$item.anchor
             $anchorNode = $null
-            if ([string]$item.anchor -ne '') {
+            if ($key -ne '' -and $lastInserted.ContainsKey($key)) {
+                $anchorNode = $lastInserted[$key]
+            } elseif ($key -ne '') {
                 foreach ($cand in $clone.SelectNodes('.//*[local-name()="OE"]')) {
-                    if ((Get-DirectText $cand) -eq [string]$item.anchor) { $anchorNode = $cand; break }
+                    if ((Get-DirectText $cand) -eq $key) { $anchorNode = $cand; break }
                 }
             }
+            $usedAnchor = $false
             foreach ($node in @($wrapper.DocumentElement.SelectNodes('./*[local-name()="OEChildren"]/*[local-name()="OE"]'))) {
                 $imported = $doc.ImportNode($node, $true)
                 if ($null -ne $anchorNode) {
                     [void]$anchorNode.ParentNode.InsertAfter($imported, $anchorNode)
-                    $anchorNode = $imported
+                    $usedAnchor = $true
                 } else {
                     [void]$container.AppendChild($imported)
                 }
+                $anchorNode = $imported
             }
+            if ($key -ne '' -and $null -ne $anchorNode) { $lastInserted[$key] = $anchorNode }
             [void]$placed.Add([ordered]@{
                 type   = $item.type
                 width  = $item.width
                 height = $item.height
                 anchor = $item.anchor
-                placed = $(if ($null -ne $anchorNode) { 'after anchor' } else { 'outline ' + $target + ' (end)' })
+                placed = $(if ($usedAnchor) { 'after anchor' } else { 'outline ' + $target + ' (end)' })
             })
         }
         $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '">' + $clone.OuterXml + '</one:Page>'
@@ -718,8 +728,11 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             if ($imageXml -ne '') {
                 [void]$sb.Append($imageXml)
             } else {
+                # Pin the placeholder to the body size: an unstyled OE written
+                # under a heading inherits the heading's font and reads back as
+                # a phantom `## [missing image]`.
                 $note = '[missing image] ' + [string]$node.src
-                [void]$sb.Append('<one:OE><one:T>' + (ConvertTo-CData $note) + '</one:T></one:OE>')
+                [void]$sb.Append('<one:OE style="font-size:' + (Format-PtSize $script:BaseFontSize) + '"><one:T>' + (ConvertTo-CData $note) + '</one:T></one:OE>')
             }
             continue
         }
@@ -1536,11 +1549,12 @@ function Action-Update($params) {
     if ($wantBackup) { $backupPath = Save-PageBackup $pageId 'update' $xml }
 
     # Media preservation: capture images / ink / attachments (with their anchor
-    # text) before the outlines that own them are deleted.
-    $mediaItems = New-Object System.Collections.ArrayList
+    # text) before the outlines that own them are deleted. The capture always
+    # happens, even with preserveMedia=false, so the result can report exactly
+    # what the rewrite dropped instead of losing it silently.
     $preserveMedia = $script:PreserveMedia
     if ($null -ne $params.preserveMedia) { $preserveMedia = [bool]$params.preserveMedia }
-    if ($preserveMedia) { $mediaItems = Get-MediaItems $doc }
+    $mediaItems = Get-MediaItems $doc
 
     # Remember the existing table's column widths so the rewritten table keeps
     # the user's manual layout (Convert-RowsToTableXml reuses them).
@@ -1576,7 +1590,7 @@ function Action-Update($params) {
     $script:PreservedOutlineSizes = $null
 
     # Put the media back and verify it actually landed on the page.
-    $preserved = @()
+    $preserved = New-Object System.Collections.ArrayList
     if ($mediaItems.Count -gt 0) {
         if ($preserveMedia) {
             $preserved = Add-MediaToPage $pageId $mediaItems
@@ -1810,14 +1824,24 @@ function Action-InsertImage($params) {
     if ($oeXml -eq '') { Fail 'IMAGE_NOT_FOUND' ('cannot read image file: ' + $path) }
     $newId = [regex]::Match($oeXml, 'objectID="([^"]+)"').Groups[1].Value
     $sizeMatch = [regex]::Match($oeXml, '<one:Size width="([^"]+)" height="([^"]+)"')
-    $widthValue = $sizeMatch.Groups[1].Value
-    $heightValue = $sizeMatch.Groups[2].Value
+    # Numbers, not the regex strings: callers compare/format these.
+    $widthValue = [double]$sizeMatch.Groups[1].Value
+    $heightValue = [double]$sizeMatch.Groups[2].Value
 
     $app = Get-App
     $xml = ''
     $app.GetPageContent($pageId, [ref]$xml, 1)
     $doc = New-XmlDoc $xml
     $nm = New-NsMgr $doc
+
+    # OneNote assigns its own objectID to a new OE, so remember the IDs that
+    # already exist and diff after the patch: the reported objectId is the one
+    # the caller can actually use with onenote_edit / insert_image anchors.
+    $knownIds = @{}
+    foreach ($oe in $doc.SelectNodes('//one:OE', $nm)) {
+        $oid = $oe.GetAttribute('objectID')
+        if ($oid -ne '') { $knownIds[$oid] = $true }
+    }
 
     $backupPath = ''
     $wantBackup = $true
@@ -1830,8 +1854,20 @@ function Action-InsertImage($params) {
     if ($outlines.Count -eq 0) {
         $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '"><one:Outline><one:OEChildren>' + $oeXml + '</one:OEChildren></one:Outline></one:Page>'
         $app.UpdatePageContent($patch, 0)
+        Start-Sleep -Milliseconds 300
+        $createdId = $newId
+        $createdXml = ''
+        try { $app.GetPageContent($pageId, [ref]$createdXml, 0) } catch { $createdXml = '' }
+        if ($createdXml -ne '') {
+            $createdDoc = New-XmlDoc $createdXml
+            $cnm = New-NsMgr $createdDoc
+            foreach ($oe in $createdDoc.SelectNodes('//one:OE', $cnm)) {
+                $oid = $oe.GetAttribute('objectID')
+                if ($oid -ne '' -and $null -ne $oe.SelectSingleNode('./*[local-name()="Image"]')) { $createdId = $oid; break }
+            }
+        }
         return [ordered]@{
-            pageId = $pageId; objectId = $newId; width = $widthValue; height = $heightValue
+            pageId = $pageId; objectId = $createdId; width = $widthValue; height = $heightValue
             position = 'new-outline'; path = $path; backupPath = $backupPath; warnings = @($script:Warnings)
         }
     }
@@ -1897,9 +1933,25 @@ function Action-InsertImage($params) {
     $app.UpdatePageContent($patch, 0)
     Start-Sleep -Milliseconds 300
 
+    # Report the ID OneNote actually assigned: the generated one is not what
+    # later reads/edits see. Existing OEs keep their IDs on an outline rewrite,
+    # so the only image OE with an unknown ID is the one just inserted.
+    $actualId = $newId
+    $afterXml = ''
+    try { $app.GetPageContent($pageId, [ref]$afterXml, 0) } catch { $afterXml = '' }
+    if ($afterXml -ne '') {
+        $afterDoc = New-XmlDoc $afterXml
+        $anm = New-NsMgr $afterDoc
+        foreach ($oe in $afterDoc.SelectNodes('//one:OE', $anm)) {
+            $oid = $oe.GetAttribute('objectID')
+            if ($oid -eq '' -or $knownIds.ContainsKey($oid)) { continue }
+            if ($null -ne $oe.SelectSingleNode('./*[local-name()="Image"]')) { $actualId = $oid; break }
+        }
+    }
+
     return [ordered]@{
         pageId     = $pageId
-        objectId   = $newId
+        objectId   = $actualId
         width      = $widthValue
         height     = $heightValue
         position   = $position

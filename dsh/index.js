@@ -11,7 +11,7 @@ import { TOOL_NAMES, TOOL_DESCRIPTIONS, toDshParameters } from "../lib/schemas.j
 import { normalizeConfig } from "../lib/config.js";
 
 export const name = "onenote-plugin";
-export const version = "0.7.1";
+export const version = "0.7.2";
 export const inject = ["tools"];
 
 export const OUTPUT = Object.freeze({

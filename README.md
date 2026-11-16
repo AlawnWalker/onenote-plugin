@@ -257,6 +257,17 @@ pci_host_probe()                    // probe.c:3143
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
 
+### 0.7.2：回归里发现的 4 个问题
+
+来自 lead 的 0.7.0 回归报告，逐条修好并真机复验（10/10）：
+
+1. **`preserveMedia:false` 变成静默丢图**：之前只在"要保留"时才采集 media，关掉后 `preservedMedia`/`warnings` 全空。现在**总是先采集**，关掉时返回逐条 `placed:"dropped"` + `warnings: ["preserveMedia=false: N media item(s) were removed by this update"]`。
+2. **缺图占位符继承了标题字号**：`[missing image] …` 的 OE 没写字号，嵌在标题下就继承 14pt，读回被当成 `## 标题`。现在显式写正文字号。
+3. **同一锚点的多张图回插顺序反了**：每条 media 都重新找"第一个匹配锚点"再 `InsertAfter`，结果后一张插到前一张前面。现在记住每个锚点上最后插入的节点，后续同锚点依次排在它后面（原文档顺序）。
+4. **`onenote_insert_image` 的返回值**：`width`/`height` 改成数字（原先是 `"600"` 这种字符串）；`objectId` 改成**写后回读到的真实 ID**（OneNote 会给新 OE 重新分配 ID，原来返回的是插件临时生成的、拿去做锚点会失败）。
+
+文档补充：图片块的 `objectId` 在**整页 `onenote_update` 之后会变**（整页重建），插入/编辑后要重新 `onenote_read` 取当前 ID；同一 Outline 的部分编辑（`onenote_edit`）不会重编号。
+
 ### 0.7.1：read 的渲染输出带上 revision / media
 
 `onenote_read` 的结构化返回一直有 `images` / `media` / `revision`，但**模型可见的是 `renderResult` 的文本**，之前页脚只有 `pageId` + `lastModified`，所以 agent 看不到"这页有几张图""revision 是多少"。0.7.1 把页脚改成：

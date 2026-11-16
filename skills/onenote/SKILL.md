@@ -94,5 +94,7 @@ serialized as JSON.
   (`0x80042014`); `onenote_read` returns `PAGE_DELETED`. Recover from the
   `backupPath` the destructive tools return.
 - `lastModifiedTime` stays stale after API writes; use `revision` instead.
+- An image block's `objectId` changes after a full `onenote_update`; re-read
+  the page to get current IDs. Partial `onenote_edit` keeps them.
 - `UpdatePageContent` merge rules: omitting a whole outline keeps it, omitting
   an OE *inside a re-sent outline* deletes that OE.
