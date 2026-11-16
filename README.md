@@ -224,3 +224,27 @@ node dev/host-contract.mjs
 ```
 
 COM 逻辑全在 `scripts/onenote-bridge.ps1`（纯 ASCII，中文走 JSON）。
+
+### 保留空白块（tree / diagram，0.6.7）
+
+围栏语言为 `tree` / `diagram` / `graph` / `art` / `ascii` / `pre` 时，按"保留空白块"处理：
+
+- 每行一个段落、等宽字体（Consolas）、字号与正文一致；
+- 前导空格原样保留（不 trim、不转 EM SPACE），`├ ─ │ └ ┬ ┌ ┐` 原样写入；
+- 不做 `//` 注释对齐（`alignCommentColumn` 对该块无效）、不加 `codePrefix`；
+- 读回时若块内含树形字符，输出为 ```` ```tree ```` 围栏，缩进与行尾空格保持不变；
+- 普通 ```` ``` ```` 代码块行为不变。
+
+示例：
+
+````markdown
+```tree
+pci_host_probe()                    // probe.c:3143
+  ├─ pci_scan_root_bus_bridge()     // probe.c:3239
+  │    └─ pci_scan_child_bus()      // probe.c:3088
+  └─ pci_bus_add_devices()
+```
+````
+
+限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
+

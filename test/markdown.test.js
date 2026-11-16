@@ -194,3 +194,19 @@ test("markdownToBlocks: default output is unchanged", () => {
   const markdown = ["```c", "int a = 1; // one", "```", ""].join("\n");
   assert.deepEqual(markdownToBlocks(markdown, { codePrefix: "│ ", alignCommentColumn: 0 }), markdownToBlocks(markdown));
 });
+test("tree fenced blocks keep leading spaces and are not realigned", () => {
+  const md = "```tree\nroot()          // r.c:1\n  \u251C\u2500 child()   // c.c:2\n  \u2502   \u2514\u2500 leaf()\n```\n";
+  const blocks = markdownToBlocks(md, { codePrefix: "" });
+  assert.deepEqual(blocks.map((block) => block.type), ["tree", "tree", "tree"]);
+  assert.equal(blocks[1].text, "  \u251C\u2500 child()   // c.c:2");
+  const back = blocksToMarkdown(blocks, { codePrefix: "" });
+  assert.match(back, /^```tree\n/);
+  assert.ok(back.includes("  \u251C\u2500 child()   // c.c:2"));
+});
+
+test("an empty codePrefix keeps a leading tree bar; a configured gutter is stripped", () => {
+  const tree = [{ type: "code", text: "│   └─ leaf()" }];
+  assert.equal(blocksToMarkdown(tree, { codePrefix: "" }), "```tree\n│   └─ leaf()\n```\n");
+  const code = [{ type: "code", text: "│ int x;" }];
+  assert.equal(blocksToMarkdown(code, { codePrefix: "│ " }), "```\nint x;\n```\n");
+});

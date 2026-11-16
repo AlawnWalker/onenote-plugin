@@ -439,7 +439,7 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             $delta = [int]$script:HeadingDelta[$type]
             $space = $script:HeadingSpace[$type]
             $headingXml = ' style="font-size:' + (Format-PtSize ($script:BaseFontSize + $delta)) + '" spaceBefore="' + $space.before + '" spaceAfter="' + $space.after + '"'
-        } elseif ($type -eq 'code') {
+        } elseif ($type -eq 'code' -or $type -eq 'tree') {
             # Pin code lines to the body size and a monospace family. Without an
             # explicit size they inherit the surrounding paragraph style (a heading
             # written just above makes them look like h2/h3 on read-back), and the
