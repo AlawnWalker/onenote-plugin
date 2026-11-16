@@ -199,7 +199,7 @@ Consolas/monospace 字体识别（正文尺寸），所以标题下方的代码�
 10. **`deleteBlock` 会连带删除嵌套子块**：删除一个标题（如 h3）时，其下缩进的 bullet/段落作为子块一并消失；需要保留就先删除或移走子块，或用 objectId 精确删除目标块。
 11. **独立分区要出现在 `onenote_list` 里，需要登记到 `extraSections`**：`onenote_create_section` 打开的分区会在当前进程内自动登记，立即可见；跨重启仍需写进 `ONENOTE_EXTRASECTIONS` 或 profile 的 `extraSections`。
 12. **回收站页读不了、也恢复不了**：`DeleteHierarchy(permanent=false)` 之后，该 pageId 在 COM 里就已经不可见（`GetPageContent` → `0x80042014`，`onenote_read` 返回 `PAGE_DELETED`），`GetHierarchy` 也列不出；本机实测笔记本与独立分区都一样，而且 COM 没有 undelete。**唯一恢复途径是插件自己的备份**：`onenote_delete` / `onenote_update` / `onenote_insert_image` 会在动页面之前写一份整页 XML（含图片 base64）到 `backupDir`，返回里的 `backupPath` 就是它。
-13. **`lastModifiedTime` 对 API 写入不生效**：`UpdatePageContent` 改完内容后，页面属性里的 `lastModifiedTime` 仍是旧值（实测创建后一直是创建时间，等多久都不变，切换页面/保存也不刷新）。判断是否真的改了页面请看 `onenote_read` 返回的 `revision`（页面 XML 的 SHA-1 前 16 位），`onenote_update` 也会返回写完后的 `revision`。
+13. **`lastModifiedTime` 对 API 写入不生效，只随"页面被 OneNote 重新加载"刷新**：`UpdatePageContent` 改完内容后，页面属性里的 `lastModifiedTime` 仍是旧值（实测：创建后连续两次写入 + 各等 20s，内容已存盘、`.one` mtime 在变，属性不变）；但如果页面被导航/切到前台（UI 或 `NavigateTo`），它会立即刷新（实测 08:33:52 → 08:33:57），`dateTime` 则始终是创建时间。所以它既不能证明"没改"，也不能证明"改了"——判断是否真的改了页面请看 `onenote_read` 返回的 `revision`（页面 XML 的 SHA-1 前 16 位），`onenote_update` 也会返回写完后的 `revision`。
 14. **`UpdatePageContent` 的删除语义**（实测，容易搞反）：patch 里**整段省略某个 Outline** → 该 Outline **不删**；patch 里带上某个 Outline（`objectID` 相同）但**省略其中的 OE** → 被省略的 OE **会删**。所以「整页重写」用 `DeletePageContent` + 新建，`onenote_edit` 用「重发所属 Outline 的完整内容」。
 
 ## 导入 markdown 文件（按章节拆页）
