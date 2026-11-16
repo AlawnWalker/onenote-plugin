@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { blocksToMarkdown, markdownToBlocks } from "../lib/markdown.js";
-import { makeToolHandlers } from "../lib/tools.js";
+import { makeToolHandlers, renderResult } from "../lib/tools.js";
 import { normalizeConfig } from "../lib/config.js";
 import { buildJsonSchema } from "../lib/schemas.js";
 
@@ -43,6 +43,23 @@ test("image blocks render back to markdown (angle brackets when the path has spa
 test("an image read from OneNote (no source path) becomes the placeholder", () => {
   const markdown = blocksToMarkdown([{ type: "image", text: "", level: 0, width: 240, height: 120 }]);
   assert.match(markdown, /!\[图片\]/);
+});
+
+test("the rendered read footer carries revision and media so the model sees them", () => {
+  const rendered = renderResult({}, {
+    ok: true,
+    data: {
+      title: "页面",
+      pageId: "{PAGE}",
+      lastModified: "2026-11-16T08:36:10.000Z",
+      revision: "ab63dce549e1feba",
+      markdown: "正文\n",
+      media: { images: 2, ink: 0, files: 0, total: 2 },
+    },
+  });
+  const text = rendered[0].text;
+  assert.match(text, /revision: ab63dce549e1feba/);
+  assert.match(text, /media: images=2 ink=0 files=0/);
 });
 
 test("onenote_read forwards images, media counts and the revision hash", async () => {

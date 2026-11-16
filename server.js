@@ -29,7 +29,10 @@ function toCallResult(args, result) {
   if (typeof data.markdown === "string") {
     const header = data.title ? `# ${data.title}\n\n` : "";
     const note = data.truncated ? `\n> ⚠ truncated: only the first ${data.blockCount} blocks shown.\n` : "";
-    const footer = `\n---\npageId: ${data.pageId ?? ""}\nlastModified: ${data.lastModified ?? ""}`;
+    const media = data.media && typeof data.media === "object"
+      ? `\nmedia: images=${data.media.images ?? 0} ink=${data.media.ink ?? 0} files=${data.media.files ?? 0}`
+      : "";
+    const footer = `\n---\npageId: ${data.pageId ?? ""}\nrevision: ${data.revision ?? ""}${media}\nlastModified: ${data.lastModified ?? ""}`;
     return { content: [{ type: "text", text: `${header}${data.markdown}${note}${footer}${buildIdList(args, result)}` }] };
   }
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };

@@ -257,6 +257,20 @@ pci_host_probe()                    // probe.c:3143
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
 
+### 0.7.1：read 的渲染输出带上 revision / media
+
+`onenote_read` 的结构化返回一直有 `images` / `media` / `revision`，但**模型可见的是 `renderResult` 的文本**，之前页脚只有 `pageId` + `lastModified`，所以 agent 看不到"这页有几张图""revision 是多少"。0.7.1 把页脚改成：
+
+```text
+---
+pageId: {...}
+revision: ab63dce549e1feba
+media: images=2 ink=0 files=0
+lastModified: 2026-11-16T08:36:10.000Z
+```
+
+MCP 宿主（`server.js`）的文本结果同步改了。要拿每张图的 `objectId`，仍然用 `withIds=true`（图片块也会列出来）。
+
 ### 0.7.0：图片不再被静默删除，能插图了
 
 这一版处理 5 个实测问题（来自 Harness lead 的现场报告）：
