@@ -2062,7 +2062,12 @@ function Action-NormalizeTables($params) {
                 if ($null -eq $oe.SelectSingleNode('./one:T', $nm)) { continue }
                 $scanned++
                 $current = Get-OeFontSize $oe
-                if ($current -gt 0 -and [math]::Abs($current - $base) -le 0.2) { continue }
+                # No explicit size means the cell inherits the page's body
+                # style, which is exactly what we want; only an explicit
+                # (larger/smaller) size needs a rewrite. Keeping this rule makes
+                # a second run report 0 instead of rewriting the same cells.
+                if ($current -le 0) { continue }
+                if ([math]::Abs($current - $base) -le 0.2) { continue }
                 $changed++
                 $outlineChanged = $true
                 if (-not $dryRun) {
