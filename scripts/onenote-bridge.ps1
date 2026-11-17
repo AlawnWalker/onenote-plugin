@@ -1110,11 +1110,11 @@ function Convert-PageXmlToBlocks($doc) {
         }
     }
     # A tree drawing often starts with a root line that has no box-drawing
-    # character ("arm_smmu_device_probe(dev)" followed by "├─ ..."). Without
-    # this, read-back would start the fence one line late and a read/write
-    # round trip would push the root line out into a paragraph. Treat the
-    # directly preceding paragraph as part of the run when it looks like a tree
-    # label rather than prose: same outline, no terminal punctuation.
+    # character ("arm_smmu_device_probe(dev)" followed by a "|--" connector).
+    # Without this, read-back would start the fence one line late and a
+    # read/write round trip would push the root line out into a paragraph. Treat
+    # the directly preceding paragraph as part of the run when it looks like a
+    # tree label rather than prose: same outline, no terminal punctuation.
     for ($i = 1; $i -lt $blocks.Count; $i++) {
         if ([string]$blocks[$i].type -ne 'tree') { continue }
         $prev = $blocks[$i - 1]
@@ -1123,7 +1123,10 @@ function Convert-PageXmlToBlocks($doc) {
             [string]$prev.outlineId -ne [string]$blocks[$i].outlineId) { continue }
         $text = [string]$prev.text
         if ($text -eq '') { continue }
-        if ($text -match '[。！？：；，、.!?:;,]$') { continue }
+        # Terminal punctuation: ASCII and CJK full stop / exclamation / question
+        # / colon / semicolon / comma / ideographic comma. Keep this file
+        # ASCII-only, so the CJK marks are written as \u escapes.
+        if ($text -match '[\u3002\uFF01\uFF1F\uFF1A\uFF1B\uFF0C\u3001.!?:;,]$') { continue }
         if ($text.Length -gt 80) { continue }
         $prev.type = 'tree'
     }
@@ -2258,6 +2261,27 @@ function Action-Publish($params) {
         }
     }
     if (Test-Path -LiteralPath $target) {
+        # Exporting a page over its own section file replaces that .one with a
+        # single-page export and leaves the section unreadable (0x80042014).
+        # Compare against the section that owns this page (works for standalone
+        # sections that are not registered in extraSections).
+        if ($formatName -eq 'one' -and $target.ToLowerInvariant().EndsWith('.one')) {
+            $targetKey = $target.Trim().Replace('/', '\').ToLowerInvariant()
+            $sectionPath = ''
+            try {
+                $hierDoc = New-XmlDoc (Get-HierarchyXml 4 '')
+                foreach ($pg in $hierDoc.SelectNodes('//*[local-name()="Page"]')) {
+                    if ($pg.GetAttribute('ID') -ne $pageId) { continue }
+                    $secNode = $pg.ParentNode
+                    while ($null -ne $secNode -and $secNode.LocalName -ne 'Section') { $secNode = $secNode.ParentNode }
+                    if ($null -ne $secNode) { $sectionPath = [string]$secNode.GetAttribute('path') }
+                    break
+                }
+            } catch { }
+            if ($sectionPath -ne '' -and $sectionPath.Trim().Replace('/', '\').ToLowerInvariant() -eq $targetKey) {
+                Fail 'TARGET_IS_SECTION' ('refusing to export a page over its own section file: ' + $target + ' - that replaces the section and makes it unreadable. Export under a different name.')
+            }
+        }
         if (-not $overwrite) { Fail 'FILE_EXISTS' ('target exists: ' + $target) }
         Remove-Item -LiteralPath $target -Force
     }
