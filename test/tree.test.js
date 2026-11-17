@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { blocksToMarkdown, markdownToBlocks, normalizeTreeIndent } from "../lib/markdown.js";
+import { blocksToMarkdown, markdownToBlocks, normalizeTreeIndent, TREE_GUIDE_PAD } from "../lib/markdown.js";
 import { normalizeConfig } from "../lib/config.js";
 
 test("normalizeTreeIndent turns a flat number of spaces into U+3000 levels", () => {
@@ -44,6 +44,20 @@ test("a connector always gets exactly one ASCII space after the glyph", () => {
   // Extra dashes/spaces collapse to the canonical form, but stay idempotent.
   assert.equal(normalizeTreeIndent("├──  y", 3), "├─ y");
   assert.equal(normalizeTreeIndent("├─ y", 3), "├─ y");
+});
+
+test("guide lines go on the same grid as blank-indented lines", () => {
+  const unit = "\u00A0\u00A0\u00A0\u00A0\u00A0\u2004";
+  const guideCell = "\u2502" + TREE_GUIDE_PAD;
+  const opts = { sourceStep: 4, indent: "bar" };
+  // One guide + one level of blank indent -> connector lands on the same grid
+  // column as a plain one-level line (│ is 8.5pt + 13.8pt pad = 22.3pt).
+  assert.equal(normalizeTreeIndent("│  └─ a1", opts), `${guideCell}└─ a1`);
+  assert.equal(normalizeTreeIndent("│     └─ a2", opts), `${guideCell}${unit}└─ a2`);
+  assert.equal(normalizeTreeIndent("    └─ c1", opts), `${unit}└─ c1`);
+  // Idempotent: our own output parses back to the same cells.
+  assert.equal(normalizeTreeIndent(`${guideCell}└─ a1`, opts), `${guideCell}└─ a1`);
+  assert.equal(normalizeTreeIndent(`${unit}└─ c1`, opts), `${unit}└─ c1`);
 });
 
 test("default indent unit is the measured 5xNBSP + U+2004 bar width", () => {
