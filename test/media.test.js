@@ -156,6 +156,17 @@ test("config: backup dir, media preservation and image width defaults", () => {
   assert.equal(normalizeConfig({ imageMaxWidth: -1 }).imageMaxWidth, 600);
 });
 
+test("onenote_normalize_tables forwards page locator and flags", async () => {
+  const bridge = fakeBridge(() => ({ pageId: "{PAGE}", baseFontSize: 12, tables: 1, cellsChanged: 4, outlinesUpdated: 1 }));
+  const handlers = makeToolHandlers({ bridge });
+  const result = await handlers.onenote_normalize_tables({ pageId: "{PAGE}", dryRun: true });
+  assert.equal(result.ok, true);
+  assert.equal(bridge.calls[0].action, "normalizetables");
+  assert.equal(bridge.calls[0].params.pageId, "{PAGE}");
+  assert.equal(bridge.calls[0].params.dryRun, true);
+  assert.equal("backup" in bridge.calls[0].params, false);
+});
+
 test("onenote_insert_image is advertised with a required path and typed options", () => {
   const schema = buildJsonSchema("onenote_insert_image");
   assert.deepEqual(schema.required, ["path"]);

@@ -7,7 +7,7 @@ const bridge = { invoke: async () => ({}) };
 
 test("package identity and tool count", () => {
   assert.equal(name, "onenote-plugin");
-  assert.equal(TOOL_NAMES.length, 12);
+  assert.equal(TOOL_NAMES.length, 13);
 });
 
 test("applyWith registers all tools with DSH-shaped definitions", () => {
@@ -18,7 +18,7 @@ test("applyWith registers all tools with DSH-shaped definitions", () => {
     config: {},
     bridge,
   });
-  assert.equal(registered.length, 12);
+  assert.equal(registered.length, 13);
   assert.deepEqual(result.tools, [...TOOL_NAMES]);
   for (const def of registered) {
     assert.equal(typeof def.execute, "function");

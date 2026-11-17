@@ -229,6 +229,27 @@ function Test-OeIsCode($oe) {
     return ($family -match 'consolas|courier|monaco|menlo|mono')
 }
 
+# Pin one outline element's font size, keeping the rest of its style string.
+function Set-OeFontSize($oe, [double]$size) {
+    $token = 'font-size:' + (Format-PtSize $size)
+    $style = [string]$oe.GetAttribute('style')
+    if ($style -eq '') {
+        $oe.SetAttribute('style', $token)
+        return $true
+    }
+    if ($style -match 'font-size:\s*[0-9]+(?:\.[0-9]+)?pt') {
+        $updated = [regex]::Replace($style, 'font-size:\s*[0-9]+(?:\.[0-9]+)?pt', $token)
+        if ($updated -eq $style) { return $false }
+        $oe.SetAttribute('style', $updated)
+        return $true
+    }
+    $trimmed = $style.TrimEnd()
+    $sep = ';'
+    if ($trimmed.EndsWith(';')) { $sep = '' }
+    $oe.SetAttribute('style', $trimmed + $sep + $token)
+    return $true
+}
+
 # ---------------------------------------------------------------------------
 # XML escaping helpers
 # ---------------------------------------------------------------------------
@@ -1983,6 +2004,95 @@ function Action-InsertImage($params) {
     }
 }
 
+# OneNote keeps table-cell formatting on the text runs (a <span style=...> inside
+# the CDATA), not only on the OE, so pinning the OE style alone does not change
+# what the reader sees. Rewrite every inline font-size token in the cell text.
+function Set-CellInlineFontSize($oe, [double]$size) {
+    $token = 'font-size:' + (Format-PtSize $size)
+    $touched = $false
+    foreach ($t in $oe.SelectNodes('./*[local-name()="T"]')) {
+        foreach ($node in @($t.ChildNodes)) {
+            if ($node.NodeType -ne 'CDATA' -and $node.NodeType -ne 'Text') { continue }
+            $value = [string]$node.Value
+            if ($value -notmatch 'font-size:\s*[0-9]+(?:\.[0-9]+)?pt') { continue }
+            $node.Value = [regex]::Replace($value, 'font-size:\s*[0-9]+(?:\.[0-9]+)?pt', $token)
+            $touched = $true
+        }
+    }
+    return $touched
+}
+
+# Repair legacy tables: cell paragraphs written by plugin versions before 0.7.4
+# carry no font size, so OneNote stored them at its table default (13.0pt).
+# Re-send only the outlines that own a table, with every cell paragraph pinned
+# to the page's body size; everything else in those outlines is copied verbatim.
+function Action-NormalizeTables($params) {
+    $pageId = Resolve-PageId $params
+    $app = Get-App
+    $xml = ''
+    $app.GetPageContent($pageId, [ref]$xml, 0)
+    $doc = New-XmlDoc $xml
+    $nm = New-NsMgr $doc
+
+    $base = Get-DocBaseFontSize $doc
+    if ($base -le 0) { $base = 12.0 }
+
+    $dryRun = $false
+    if ($null -ne $params.dryRun) { $dryRun = [bool]$params.dryRun }
+
+    $backupPath = ''
+    if (-not $dryRun) {
+        $wantBackup = $true
+        if ($null -ne $params.backup) { $wantBackup = [bool]$params.backup }
+        if ($wantBackup) {
+            $full = ''
+            try { $app.GetPageContent($pageId, [ref]$full, 1) } catch { $full = '' }
+            if ($full -ne '') { $backupPath = Save-PageBackup $pageId 'tables' $full }
+        }
+    }
+
+    $tables = @($doc.SelectNodes('//one:Page//one:Table', $nm))
+    $scanned = 0
+    $changed = 0
+    $touched = New-Object System.Collections.ArrayList
+    foreach ($outline in $doc.SelectNodes('//one:Page/one:Outline', $nm)) {
+        $outlineChanged = $false
+        foreach ($cell in $outline.SelectNodes('.//one:Cell', $nm)) {
+            foreach ($oe in $cell.SelectNodes('.//one:OE', $nm)) {
+                if ($null -eq $oe.SelectSingleNode('./one:T', $nm)) { continue }
+                $scanned++
+                $current = Get-OeFontSize $oe
+                if ($current -gt 0 -and [math]::Abs($current - $base) -le 0.2) { continue }
+                $changed++
+                $outlineChanged = $true
+                if (-not $dryRun) {
+                    [void](Set-CellInlineFontSize $oe $base)
+                    [void](Set-OeFontSize $oe $base)
+                }
+            }
+        }
+        if ($outlineChanged -and -not $dryRun) { [void]$touched.Add($outline) }
+    }
+
+    foreach ($outline in $touched) {
+        $patch = '<?xml version="1.0"?><one:Page xmlns:one="' + $script:NS + '" ID="' + (ConvertTo-Attr $pageId) + '">' + $outline.OuterXml + '</one:Page>'
+        $app.UpdatePageContent($patch, 0)
+        Start-Sleep -Milliseconds 200
+    }
+
+    return [ordered]@{
+        pageId          = $pageId
+        baseFontSize    = $base
+        tables          = $tables.Count
+        cellsScanned    = $scanned
+        cellsChanged    = $changed
+        outlinesUpdated = $touched.Count
+        backupPath      = $backupPath
+        dryRun          = $dryRun
+        warnings        = @($script:Warnings)
+    }
+}
+
 function Action-Delete($params) {
     $pageId = Resolve-PageId $params
     $permanent = $false
@@ -2210,6 +2320,7 @@ try {
         'append'  { $data = Action-Append $params }
         'edit'    { $data = Action-Edit $params }
         'insertimage' { $data = Action-InsertImage $params }
+        'normalizetables' { $data = Action-NormalizeTables $params }
         'delete'  { $data = Action-Delete $params }
         'setcolor' { $data = Action-SetColor $params }
         'setsettings' { $data = Action-SetSettings $params }

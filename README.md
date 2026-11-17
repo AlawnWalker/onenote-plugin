@@ -2,7 +2,7 @@
 
 一个 **多宿主 OneNote 插件**：同一份核心同时支持 **Claude Code（stdio MCP）** 与 **DSH（原生 Cordis）**，直接读写本机 **Microsoft OneNote 桌面版**（COM 自动化），操作的是真实本地笔记本（含 `.one` 分区文件），不是云端的 Graph 副本。
 
-- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_insert_image` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
+- 工具：`onenote_list` / `onenote_read` / `onenote_search` / `onenote_create` / `onenote_update` / `onenote_append` / `onenote_edit` / `onenote_insert_image` / `onenote_normalize_tables` / `onenote_publish` / `onenote_delete` / `onenote_create_section` / `onenote_rename_section`
 - 依赖：仅 `@modelcontextprotocol/server`；运行时还需要 Windows PowerShell 5.1（`powershell.exe`）+ 本机 OneNote
 - 架构：每次工具调用 → 写 `req.json` → spawn `powershell.exe` 跑 `scripts/onenote-bridge.ps1`（COM）→ 读 `res.json`（§13 A 方案）
 
@@ -92,7 +92,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `ONENOTE_NEST_UNDER_HEADINGS` | 空（关） | `1`/`true` 把标题后的内容按层级缩进（DSH 原生索引） |
 | `ONENOTE_INDENTED_CHILDREN` | 空（关） | `1`/`true` 把列表项后的缩进行当作子段落 |
 | `ONENOTE_EXTRASECTIONS` | `[]` | JSON 数组。**独立分区必须按 `path` 记**（ID 每次重启会变），如 `[{"name":"快速笔记","path":"<你的路径>\\快速笔记.one"}]` |
-| `ONENOTE_BACKUP_DIR` | 空（`%TEMP%\onenote-plugin-backups`） | `onenote_update` / `onenote_delete` / `onenote_insert_image` 动页面之前，先把整页 XML（含图片 base64）写到这个目录；返回里带 `backupPath` |
+| `ONENOTE_BACKUP_DIR` | 空（`%TEMP%\onenote-plugin-backups`） | `onenote_update` / `onenote_delete` / `onenote_insert_image` / `onenote_normalize_tables` 动页面之前，先把整页 XML（含图片 base64）写到这个目录；返回里带 `backupPath` |
 | `ONENOTE_PRESERVE_MEDIA` | `1` | `onenote_update` 重写 Outline 时把图片/墨迹/附件搬回去；`0` 明确丢图（会写 warning） |
 | `ONENOTE_IMAGE_MAX_WIDTH` | `600` | markdown 图片未写宽度时的默认宽度（pt），超宽图按此等比缩小 |
 
@@ -149,6 +149,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `onenote_append` | 页面定位 + `markdown` | 页面末尾追加一个 Outline |
 | `onenote_edit` | 页面定位 + `mode` + `objectId`/`find` + 模式参数 | **原地改一个 block**：`replaceText`/`replaceBlock`/`insertAfter`/`deleteBlock`；`find` 默认子串匹配，`exact=true` 要求整块文本相等；`deleteBlock` 会连带删除嵌套子块 |
 | `onenote_insert_image` | 页面定位 + `path` + `width?` + `objectId?`/`find?` + `position?` | 往**已有页面**插一张本地图片：锚点块之后/之前或页尾；只重写锚点所在的 Outline，其余块不动；插入前备份页面。文本锚点连续插入时按调用顺序排在已有图之后，`objectId` 锚点则紧贴该块；锚点块带子块时 `after` 落在整个子块之后（0.7.3） |
+| `onenote_normalize_tables` | 页面定位 + `dryRun?` + `backup?` | 修复 0.7.4 之前写入的表格：把单元格段落字号钉到正文基准（同时改 OE 的 `style` 和单元格文本里的内联 `span`）；只重写含表格的 Outline，其余内容原样保留；默认先备份整页 XML；`dryRun=true` 只报告 `tables`/`cellsScanned`/`cellsChanged`/`outlinesUpdated`，不写页面（0.7.5） |
 | `onenote_publish` | 页面定位 + `path` + `format?` | 导出 `.one`/`.pdf`/`.docx`/`.xps`/`.mht`/`.html` 等；目标扩展名会按格式归一化（`format=html` 写 `.htm`） |
 | `onenote_delete` | 页面定位 + `permanent?` + `backup?` | 删页，默认进回收站；删之前把整页 XML（含图片）备份，返回 `backupPath` |
 | `onenote_create_section` | `path`（.one 绝对路径）、`keepBlankPage?` | 建/打开独立分区；新建时自动生成的空白页会删掉，`keepBlankPage=true` 保留 |
@@ -256,6 +257,17 @@ pci_host_probe()                    // probe.c:3143
 
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
+
+### 0.7.5：存量表格字号修复工具
+
+0.7.4 只保证**新写入**的表格字号正确；在此之前写入的页面，单元格仍停在 OneNote 表格默认的 13pt。0.7.5 新增 `onenote_normalize_tables`：
+
+- 扫描页面里所有表格的单元格段落，把字号钉到该页正文基准（同时改 OE 的 `style` 和单元格文本里的内联 `span` 样式，OneNote 有时把格式放在 span 上）；
+- 只重发包含表格的 Outline，其他内容逐字保留；改前默认备份整页 XML（返回 `backupPath`）；
+- `dryRun=true` 只统计 `tables` / `cellsScanned` / `cellsChanged` / `outlinesUpdated`，不写页面；
+- 返回 `baseFontSize`、各计数、`backupPath` 与 `warnings`。
+
+实测：14 个存量页面的表格 `13.0pt` 计数全部归零，HTML 导出中 `<td>` 与正文 `<p>` 字号一致。
 
 ### 0.7.4：表格字号与正文一致
 

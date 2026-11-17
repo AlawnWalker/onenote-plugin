@@ -48,7 +48,7 @@ const send = (client, id, method, params) =>
   client.send({ jsonrpc: "2.0", id, method, params });
 const flush = () => new Promise((resolve) => setTimeout(resolve, 50));
 
-test("tools/list advertises all 12 tools with standard JSON Schema", async () => {
+test("tools/list advertises all 13 tools with standard JSON Schema", async () => {
   const handlers = makeToolHandlers({ bridge: fakeBridge(() => ({})) });
   const { client, server, received } = await startServer(handlers);
 
@@ -59,7 +59,7 @@ test("tools/list advertises all 12 tools with standard JSON Schema", async () =>
   assert.ok(response, "tools/list response received");
   assert.equal(response.error, undefined);
   const tools = response.result.tools;
-  assert.equal(tools.length, 12);
+  assert.equal(tools.length, 13);
   assert.deepEqual(tools.map((t) => t.name).sort(), [...TOOL_NAMES].sort());
   for (const tool of tools) {
     assert.equal(tool.inputSchema.type, "object");
