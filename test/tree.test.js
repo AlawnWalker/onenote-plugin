@@ -60,30 +60,36 @@ test("guide lines go on the same grid as blank-indented lines", () => {
   assert.equal(normalizeTreeIndent(`${unit}└─ c1`, opts), `${unit}└─ c1`);
 });
 
-test("default indent unit is the measured 5xNBSP + U+2004 bar width", () => {
+test("default indent unit is 6xNBSP (stable across machines)", () => {
   const blocks = markdownToBlocks("root\n   ├─ a\n");
-  assert.equal(blocks[1].text, "\u00A0\u00A0\u00A0\u00A0\u00A0\u2004├─ a");
+  assert.equal(blocks[1].text, "\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0├─ a");
   // Idempotent: the unit is recognised again on a second pass.
   assert.equal(
-    normalizeTreeIndent(blocks[1].text, { indent: "bar" }),
-    "\u00A0\u00A0\u00A0\u00A0\u00A0\u2004├─ a",
+    normalizeTreeIndent(blocks[1].text, { indent: "nbsp" }),
+    "\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0├─ a",
   );
-  // And a legacy U+3000 page converts one level per full-width space.
+  // A legacy U+3000 page converts one level per full-width space.
   assert.equal(
-    normalizeTreeIndent("\u3000\u3000└─ x", { indent: "bar" }),
-    "\u00A0\u00A0\u00A0\u00A0\u00A0\u2004\u00A0\u00A0\u00A0\u00A0\u00A0\u2004└─ x",
+    normalizeTreeIndent("\u3000\u3000└─ x", { indent: "nbsp" }),
+    "\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0└─ x",
+  );
+  // The `bar` mode is still available for higher local precision.
+  assert.equal(
+    markdownToBlocks("root\n   ├─ a\n", { treeIndent: "bar" })[1].text,
+    "\u00A0\u00A0\u00A0\u00A0\u00A0\u2004├─ a",
   );
 });
 
-test("config: treeStyle defaults to paragraph, treeIndent to bar, step to 3", () => {
+test("config: treeStyle defaults to paragraph, treeIndent to nbsp, step to 3", () => {
   const defaults = normalizeConfig({});
   assert.equal(defaults.treeStyle, "paragraph");
-  assert.equal(defaults.treeIndent, "bar");
+  assert.equal(defaults.treeIndent, "nbsp");
   assert.equal(defaults.treeIndentStep, 3);
   assert.equal(normalizeConfig({ treeStyle: "mono" }).treeStyle, "mono");
   assert.equal(normalizeConfig({ treeStyle: "weird" }).treeStyle, "paragraph");
   assert.equal(normalizeConfig({ treeIndent: "ideographic" }).treeIndent, "ideographic");
-  assert.equal(normalizeConfig({ treeIndent: "weird" }).treeIndent, "bar");
+  assert.equal(normalizeConfig({ treeIndent: "bar" }).treeIndent, "bar");
+  assert.equal(normalizeConfig({ treeIndent: "weird" }).treeIndent, "nbsp");
   assert.equal(normalizeConfig({ treeIndentStep: "2" }).treeIndentStep, 2);
   assert.equal(normalizeConfig({ treeIndentStep: 99 }).treeIndentStep, 3);
 });
