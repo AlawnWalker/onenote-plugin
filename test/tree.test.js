@@ -36,6 +36,16 @@ test("tree blocks keep their fence on read-back", () => {
   assert.deepEqual(markdownToBlocks(md).map((b) => b.text), ["\u3000├─ a", "\u3000\u3000└─ a1"]);
 });
 
+test("a connector always gets exactly one ASCII space after the glyph", () => {
+  assert.equal(normalizeTreeIndent("└─func()", 3), "└─ func()");
+  assert.equal(normalizeTreeIndent("   ├─x", 3), "\u3000├─ x");
+  // NBSP (which a generator may inject so HTML keeps it) becomes U+0020.
+  assert.equal(normalizeTreeIndent("└─\u00A0func()", 3), "└─ func()");
+  // Extra dashes/spaces collapse to the canonical form, but stay idempotent.
+  assert.equal(normalizeTreeIndent("├──  y", 3), "├─ y");
+  assert.equal(normalizeTreeIndent("├─ y", 3), "├─ y");
+});
+
 test("config: treeStyle defaults to paragraph, treeIndentStep to 3", () => {
   const defaults = normalizeConfig({});
   assert.equal(defaults.treeStyle, "paragraph");
