@@ -687,10 +687,13 @@ function Convert-RowsToTableXml($rows) {
             # verbatim when the page is read back, so write the full-width form.
             # "<br>" separates the lines of one cell: write one OE per line, or
             # OneNote mangles the literal tag and drops the text around it.
+            # Pin every cell paragraph to the body size: an unstyled cell falls
+            # back to OneNote's table default (12pt), which is one size larger
+            # than a page whose body is, say, 10.5pt.
             [void]$sb.Append('<one:Cell><one:OEChildren>')
             foreach ($part in ($cell -split '(?i)<br\s*/?>')) {
                 $line = $part.Replace('>', [string][char]0xFF1E)
-                [void]$sb.Append('<one:OE><one:T>' + (ConvertTo-CData $line) + '</one:T></one:OE>')
+                [void]$sb.Append('<one:OE style="font-size:' + (Format-PtSize $script:BaseFontSize) + '"><one:T>' + (ConvertTo-CData $line) + '</one:T></one:OE>')
             }
             [void]$sb.Append('</one:OEChildren></one:Cell>')
         }
