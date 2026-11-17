@@ -49,7 +49,7 @@ test("indentedChildren: a heading resets the list context", () => {
 
 test("indentedChildren: tree drawings stay tree blocks with U+3000 indents", () => {
   const markdown = ["- 一级", "  ├─ 子节点", ""].join("\n");
-  const blocks = markdownToBlocks(markdown, { indentedChildren: true });
+  const blocks = markdownToBlocks(markdown, { indentedChildren: true, treeIndent: "ideographic" });
   const tree = blocks.find((block) => block.type === "tree");
   assert.equal(tree.level, 0);
   assert.equal(tree.text, "\u3000├─ 子节点");

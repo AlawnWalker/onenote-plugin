@@ -79,6 +79,7 @@ async function main() {
       alignCommentColumn: config.alignCommentColumn,
       alignCommentMax: config.alignCommentMax,
       treeStyle: config.treeStyle,
+      treeIndent: config.treeIndent,
       treeIndentStep: config.treeIndentStep,
     },
   });

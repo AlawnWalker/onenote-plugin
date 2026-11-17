@@ -11,7 +11,7 @@ import { TOOL_NAMES, TOOL_DESCRIPTIONS, toDshParameters } from "../lib/schemas.j
 import { normalizeConfig } from "../lib/config.js";
 
 export const name = "onenote-plugin";
-export const version = "0.7.8";
+export const version = "0.7.9";
 export const inject = ["tools"];
 
 export const OUTPUT = Object.freeze({
@@ -39,6 +39,7 @@ export function applyWith({ defineTool, ctx, config = {}, bridge } = {}) {
       alignCommentColumn: cfg.alignCommentColumn,
       alignCommentMax: cfg.alignCommentMax,
       treeStyle: cfg.treeStyle,
+      treeIndent: cfg.treeIndent,
       treeIndentStep: cfg.treeIndentStep,
     },
   });
