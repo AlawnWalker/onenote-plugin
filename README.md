@@ -95,6 +95,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 `
 | `ONENOTE_BACKUP_DIR` | 空（`%TEMP%\onenote-plugin-backups`） | `onenote_update` / `onenote_delete` / `onenote_insert_image` / `onenote_normalize_tables` 动页面之前，先把整页 XML（含图片 base64）写到这个目录；返回里带 `backupPath` |
 | `ONENOTE_PRESERVE_MEDIA` | `1` | `onenote_update` 重写 Outline 时把图片/墨迹/附件搬回去；`0` 明确丢图（会写 warning） |
 | `ONENOTE_IMAGE_MAX_WIDTH` | `600` | markdown 图片未写宽度时的默认宽度（pt），超宽图按此等比缩小 |
+| `ONENOTE_TREE_STYLE` | `paragraph` | ```` ```tree ```` 围栏的渲染方式：`paragraph` = 正文段落（微软雅黑/正文字号，无段距）；`mono` = 旧的等宽代码块（Consolas） |
+| `ONENOTE_TREE_INDENT_STEP` | `3` | 树行一个层级对应多少个半角空格（`├─ ` 宽 3 列，所以默认 3）；已写成 U+3000 的缩进按 1 个 = 1 级保留 |
 
 ### 用户配置文件（插件启动器）
 
@@ -234,14 +236,15 @@ node dev/host-contract.mjs
 
 COM 逻辑全在 `scripts/onenote-bridge.ps1`（纯 ASCII，中文走 JSON）。
 
-### 保留空白块（tree / diagram，0.6.7）
+### 保留空白块（tree / diagram）
 
 围栏语言为 `tree` / `diagram` / `graph` / `art` / `ascii` / `pre` 时，按"保留空白块"处理：
 
-- 每行一个段落、等宽字体（Consolas）、字号与正文一致；
-- 前导空格原样保留（不 trim、不转 EM SPACE），`├ ─ │ └ ┬ ┌ ┐` 原样写入；
+- **0.7.6 起默认按正文段落渲染**（微软雅黑、正文字号、`margin:0in`、行间紧贴），不再用 Consolas；要旧的等宽外观设 `treeStyle: 'mono'`；
+- 缩进换算成 U+3000（OneNote 会吃掉行首普通空格），层级由块内缩进步长推导，`n 级 = n 个 U+3000`；
+- 前导 U+3000 原样保留（幂等），`├ ─ │ └ ┬ ┌ ┐` 原样写入；
 - 不做 `//` 注释对齐（`alignCommentColumn` 对该块无效）、不加 `codePrefix`；
-- 读回时若块内含树形字符，输出为 ```` ```tree ```` 围栏，缩进与行尾空格保持不变；
+- 读回时命中盒线字符 + U+3000 缩进的段落，输出为 ```` ```tree ```` 围栏；
 - 普通 ```` ``` ```` 代码块行为不变。
 
 示例：
@@ -257,6 +260,26 @@ pci_host_probe()                    // probe.c:3143
 
 限制：**表格单元格**里的 `->` 会被 OneNote 转成全角 `-＞`（仅表格；正文与代码块不受影响）。
 
+
+### 0.7.6：树形结构改为正文段落（默认），并修 3 个 edit 缺陷
+
+树形图（` ```tree ` 围栏或直接写 `├─`/`└─`）不再走代码块，默认按**正文段落**渲染，导出 HTML 是：
+
+```html
+<p style='margin:0in;font-family:微软雅黑;font-size:12.0pt'>　├─ a</p>
+```
+
+- 无 Consolas、无内联 span 拆分、`margin:0in`（行间紧贴），字号跟随正文基准；
+- 缩进按**块内实际的空格步长**推导（取所有缩进宽度的最大公约数），输出严格为 `n 级 = n 个 U+3000`，线性不再漂移（3/6/9 空格 → 1/2/3 个 U+3000）；
+- 已经是 U+3000 的缩进原样保留（幂等）；
+- 想恢复旧外观：`treeStyle: 'mono'`（全局配置，或 `ONENOTE_TREE_STYLE=mono`）；
+- 读回时按 U+3000 缩进 + 盒线字符识别为 ```tree 围栏（未带盒线字符的首行会读成普通段落）。
+
+同时修了 `onenote_edit` 的三个缺陷：
+
+1. **`replaceText` 丢格式**：OneNote 把 run 的字号/字体放在 `<one:T>` 里的内联 `<span style=...>` 中，原实现直接替换 CDATA 导致 13pt 标题掉回 12pt。现在按替换前的实际字号/字体重新包 span。
+2. **`replaceBlock` 忽略 `kind` 且生成非法 XML**：以前把新 `<one:T>` 追加到 `<one:OEChildren>` 之后（schema 要求 T 在子块之前），且 `kind` 完全没用。现在按 `kind` 重建（h2/h3 用 headingDelta + 段距，bullet/number 重建 `one:List`，para 只写正文字号），新 T 插在子块之前，子块保留。
+3. **`insertAfter` 标题字号硬编码 4/2**：和 `headingDelta`（默认 2/1）不一致，插入的 h2 会变成 16pt。现在统一用 `headingDelta` + 对应段距。
 
 ### 0.7.5：存量表格字号修复工具
 

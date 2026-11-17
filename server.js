@@ -78,6 +78,8 @@ async function main() {
       codePrefix: config.codePrefix,
       alignCommentColumn: config.alignCommentColumn,
       alignCommentMax: config.alignCommentMax,
+      treeStyle: config.treeStyle,
+      treeIndentStep: config.treeIndentStep,
     },
   });
   const server = createMcpServer({ handlers });

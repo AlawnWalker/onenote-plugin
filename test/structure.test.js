@@ -47,10 +47,10 @@ test("indentedChildren: a heading resets the list context", () => {
   assert.equal(para.text, "　后续段落");
 });
 
-test("indentedChildren: tree drawings keep the EM SPACE treatment", () => {
+test("indentedChildren: tree drawings stay tree blocks with U+3000 indents", () => {
   const markdown = ["- 一级", "  ├─ 子节点", ""].join("\n");
   const blocks = markdownToBlocks(markdown, { indentedChildren: true });
-  const para = blocks.find((block) => block.type === "para");
-  assert.equal(para.level, 0);
-  assert.equal(para.text, "　├─ 子节点");
+  const tree = blocks.find((block) => block.type === "tree");
+  assert.equal(tree.level, 0);
+  assert.equal(tree.text, "\u3000├─ 子节点");
 });

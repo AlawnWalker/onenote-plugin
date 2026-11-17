@@ -119,15 +119,16 @@ test("pipes inside table cells are escaped on the way out", () => {
   assert.match(markdown, /a\\\|b/);
 });
 
-test("indented tree lines become separate paragraphs with EM SPACE indents", () => {
+test("indented tree lines become tree blocks with one U+3000 per level", () => {
   const blocks = markdownToBlocks(
     "kernel_init_freeable()\n  ├─ do_pre_smp_initcalls()\n  └─ do_basic_setup()\n        │    note\n",
   );
-  assert.deepEqual(blocks.map((b) => b.type), ["para", "para", "para", "para"]);
+  // This block uses 2-space steps, so the step is derived as gcd(2, 8) = 2.
+  assert.deepEqual(blocks.map((b) => b.type), ["para", "tree", "tree", "tree"]);
   assert.equal(blocks[0].text, "kernel_init_freeable()");
-  assert.equal(blocks[1].text, "　├─ do_pre_smp_initcalls()");
-  assert.equal(blocks[2].text, "　└─ do_basic_setup()");
-  assert.equal(blocks[3].text, "　　　　│    note");
+  assert.equal(blocks[1].text, "\u3000├─ do_pre_smp_initcalls()");
+  assert.equal(blocks[2].text, "\u3000└─ do_basic_setup()");
+  assert.equal(blocks[3].text, "\u3000\u3000\u3000\u3000│    note");
 });
 test("displayWidth counts CJK as two columns", () => {
   assert.equal(displayWidth("abc"), 3);
@@ -194,14 +195,26 @@ test("markdownToBlocks: default output is unchanged", () => {
   const markdown = ["```c", "int a = 1; // one", "```", ""].join("\n");
   assert.deepEqual(markdownToBlocks(markdown, { codePrefix: "│ ", alignCommentColumn: 0 }), markdownToBlocks(markdown));
 });
-test("tree fenced blocks keep leading spaces and are not realigned", () => {
+test("tree fenced blocks get U+3000 indentation and are not realigned", () => {
   const md = "```tree\nroot()          // r.c:1\n  \u251C\u2500 child()   // c.c:2\n  \u2502   \u2514\u2500 leaf()\n```\n";
   const blocks = markdownToBlocks(md, { codePrefix: "" });
   assert.deepEqual(blocks.map((block) => block.type), ["tree", "tree", "tree"]);
-  assert.equal(blocks[1].text, "  \u251C\u2500 child()   // c.c:2");
+  assert.equal(blocks[0].text, "root()          // r.c:1");
+  assert.equal(blocks[1].text, "\u3000\u251C\u2500 child()   // c.c:2");
   const back = blocksToMarkdown(blocks, { codePrefix: "" });
   assert.match(back, /^```tree\n/);
-  assert.ok(back.includes("  \u251C\u2500 child()   // c.c:2"));
+  assert.ok(back.includes("\u3000\u251C\u2500 child()   // c.c:2"));
+});
+
+test("treeStyle: mono keeps the legacy verbatim spaces in tree fences", () => {
+  const md = "```tree\nroot()\n  \u251C\u2500 child()\n```\n";
+  const blocks = markdownToBlocks(md, { codePrefix: "", treeStyle: "mono" });
+  assert.equal(blocks[1].text, "  \u251C\u2500 child()");
+});
+
+test("3-space tree sources normalise to one U+3000 per level", () => {
+  const blocks = markdownToBlocks("root\n   ├─ a\n      └─ a1\n");
+  assert.deepEqual(blocks.map((b) => b.text), ["root", "\u3000├─ a", "\u3000\u3000└─ a1"]);
 });
 
 test("an empty codePrefix keeps a leading tree bar; a configured gutter is stripped", () => {

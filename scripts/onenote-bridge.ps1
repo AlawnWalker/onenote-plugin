@@ -29,6 +29,8 @@ $script:BackupDir = ''
 $script:PreserveMedia = $true
 # Upper bound (pt) for images written from markdown when no width is given.
 $script:ImageMaxWidth = 600.0
+# ```tree fences: "paragraph" = body paragraphs (default), "mono" = code look.
+$script:TreeStyle = 'paragraph'
 # Non-fatal notes collected while rendering (missing image files, dropped
 # media, ...). Returned as `warnings` instead of failing the whole page.
 $script:Warnings = New-Object System.Collections.ArrayList
@@ -788,6 +790,12 @@ function Render-OENodes($nodes, $sb, [int]$depth = 0) {
             $delta = [int]$script:HeadingDelta[$type]
             $space = $script:HeadingSpace[$type]
             $headingXml = ' style="font-size:' + (Format-PtSize ($script:BaseFontSize + $delta)) + '" spaceBefore="' + $space.before + '" spaceAfter="' + $space.after + '"'
+        } elseif ($type -eq 'tree' -and $script:TreeStyle -eq 'paragraph') {
+            # Tree drawings as ordinary body text (default since 0.7.6): same
+            # font/size as the paragraph around it, no Consolas and no
+            # paragraph spacing, so consecutive lines touch. The leading
+            # U+3000 indentation is part of the text.
+            $headingXml = ' style="font-size:' + (Format-PtSize $script:BaseFontSize) + '" spaceBefore="0.0" spaceAfter="0.0"'
         } elseif ($type -eq 'code' -or $type -eq 'tree') {
             # Pin code lines to the body size and a monospace family. Without an
             # explicit size they inherit the surrounding paragraph style (a heading
@@ -1013,6 +1021,11 @@ function Convert-ContainerToBlocks($container, [int]$level) {
                 # empty-text guard as well.
                 if (Test-OeIsCode $child) {
                     $kind = 'code'
+                } elseif ($text -match '[\u2500-\u257F]') {
+                    # Tree drawings are body paragraphs since 0.7.6 (no
+                    # Consolas); recognise them by the box-drawing characters
+                    # (U+2500..U+257F) so read-back can restore the tree fence.
+                    $kind = 'tree'
                 } elseif ($text -ne '') {
                     # Formatted headings written by this plugin sit at
                     # base + headingDelta; pages written by older versions used
@@ -1754,6 +1767,12 @@ function Action-Edit($params) {
         if ($search -eq '') { Fail 'BAD_ARGUMENT' 'search is required for replaceText' }
         $all = $false
         if ($null -ne $params.all) { $all = [bool]$params.all }
+        # OneNote keeps the run formatting in a <span style=...> INSIDE the T
+        # text. Replacing the text with bare characters would drop it (a 13pt
+        # heading silently became 12pt), so re-wrap the new text with the
+        # formatting that was effective before the edit.
+        $keepSize = Get-OeFontSize $cloneTarget
+        $keepFamily = Get-OeFontFamily $cloneTarget
         foreach ($t in @($cloneTarget.SelectNodes('./*[local-name()="T"]'))) {
             $text = $t.InnerText
             $idx = $text.IndexOf($search)
@@ -1765,16 +1784,67 @@ function Action-Edit($params) {
                 $newText = $text.Substring(0, $idx) + $replacement + $text.Substring($idx + $search.Length)
                 $changed += 1
             }
+            $spanStyles = @()
+            if ($keepFamily -ne '') { $spanStyles += ('font-family:' + $keepFamily) }
+            if ($keepSize -gt 0) { $spanStyles += ('font-size:' + (Format-PtSize $keepSize)) }
+            $content = $newText
+            if ($spanStyles.Count -gt 0 -and $text -match '<span') {
+                $content = "<span style='" + ($spanStyles -join ';') + "'>" + $newText + '</span>'
+            }
             $t.RemoveAll()
-            [void]$t.AppendChild($cloneDoc.CreateCDataSection($newText))
+            [void]$t.AppendChild($cloneDoc.CreateCDataSection($content))
             if (-not $all) { break }
         }
         if ($changed -eq 0) { Fail 'NOT_FOUND' ('text not found in block ' + $objectId) }
     } elseif ($mode -eq 'replaceBlock') {
         $text = ''
         if ($null -ne $params.text) { $text = [string]$params.text }
+        $kind = ''
+        if ($null -ne $params.kind) { $kind = ([string]$params.kind).ToLower() }
+        if ($kind -eq '' ) { $kind = 'para' }
+        $base = Get-DocBaseFontSize $doc
+        if ($base -le 0) { $base = $script:BaseFontSize }
+        if ($base -le 0) { $base = 12.0 }
+
+        # Drop the old text, list marker and heading spacing; the children
+        # (nested blocks) stay and the new T is inserted BEFORE them, which is
+        # the order the OneNote schema requires (T then OEChildren).
         foreach ($t in @($cloneTarget.SelectNodes('./*[local-name()="T"]'))) { [void]$cloneTarget.RemoveChild($t) }
-        [void]$cloneTarget.AppendChild((New-CdataTextElement $cloneDoc $text))
+        $oldList = $cloneTarget.SelectSingleNode('./*[local-name()="List"]')
+        if ($null -ne $oldList) { [void]$cloneTarget.RemoveChild($oldList) }
+        foreach ($attr in @('style', 'spaceBefore', 'spaceAfter')) {
+            if ($cloneTarget.HasAttribute($attr)) { [void]$cloneTarget.RemoveAttribute($attr) }
+        }
+
+        if ($kind -eq 'h2' -or $kind -eq 'h3') {
+            $delta = [double]$script:HeadingDelta[$kind]
+            $space = $script:HeadingSpace[$kind]
+            $cloneTarget.SetAttribute('style', 'font-size:' + (Format-PtSize ($base + $delta)))
+            $cloneTarget.SetAttribute('spaceBefore', [string]$space.before)
+            $cloneTarget.SetAttribute('spaceAfter', [string]$space.after)
+        } elseif ($kind -eq 'bullet' -or $kind -eq 'number') {
+            $list = $cloneDoc.CreateElement('one', 'List', $script:NS)
+            $marker = $cloneDoc.CreateElement('one', 'Bullet', $script:NS)
+            $marker.SetAttribute('bullet', (Get-BulletValueForLevel 0))
+            $bulletSize = $script:BaseFontSize
+            if ($script:BulletFontSize -gt 0) { $bulletSize = $script:BulletFontSize }
+            $marker.SetAttribute('fontSize', ('{0:0.0}' -f $bulletSize))
+            [void]$list.AppendChild($marker)
+            [void]$cloneTarget.PrependChild($list)
+            $cloneTarget.SetAttribute('style', 'font-size:' + (Format-PtSize $base))
+            if ($kind -eq 'number') {
+                $ordinal = 1
+                if ($null -ne $params.ordinal) { $ordinal = [int]$params.ordinal }
+                $text = [string]$ordinal + '. ' + $text
+            }
+        } else {
+            $cloneTarget.SetAttribute('style', 'font-size:' + (Format-PtSize $base))
+        }
+
+        $newT = New-CdataTextElement $cloneDoc $text
+        $children = $cloneTarget.SelectSingleNode('./*[local-name()="OEChildren"]')
+        if ($null -ne $children) { [void]$cloneTarget.InsertBefore($newT, $children) }
+        else { [void]$cloneTarget.AppendChild($newT) }
         $changed = 1
     } elseif ($mode -eq 'insertAfter') {
         $text = ''
@@ -1784,10 +1854,16 @@ function Action-Edit($params) {
         $newOe = $cloneDoc.CreateElement('one', 'OE', $script:NS)
         if ($kind -eq 'h2' -or $kind -eq 'h3') {
             $base = Get-DocBaseFontSize $doc
+            if ($base -le 0) { $base = $script:BaseFontSize }
             if ($base -le 0) { $base = 12.0 }
-            $delta = 4
-            if ($kind -eq 'h3') { $delta = 2 }
-            $newOe.SetAttribute('style', ('font-size:' + (Format-PtSize ($base + $delta)) + ';'))
+            # Same relative sizing as on create (headingDelta: default h2 +2,
+            # h3 +1); 4/2 used to be hard-coded here and disagreed with the
+            # config, so an inserted heading looked bigger than a written one.
+            $delta = [double]$script:HeadingDelta[$kind]
+            $space = $script:HeadingSpace[$kind]
+            $newOe.SetAttribute('style', 'font-size:' + (Format-PtSize ($base + $delta)))
+            $newOe.SetAttribute('spaceBefore', [string]$space.before)
+            $newOe.SetAttribute('spaceAfter', [string]$space.after)
         } elseif ($kind -eq 'bullet' -or $kind -eq 'number') {
             # OneNote requires the bullet attribute; numbered entries are written
             # the same way as on create (bullet marker + "N. " prefix text).
@@ -2285,6 +2361,10 @@ try {
                 $mw = [double]$payload.params.imageMaxWidth
                 if ($mw -gt 0) { $script:ImageMaxWidth = $mw }
             } catch { }
+        }
+        if ($null -ne $payload.params.treeStyle) {
+            $ts = ([string]$payload.params.treeStyle).Trim().ToLower()
+            if ($ts -eq 'mono') { $script:TreeStyle = 'mono' }
         }
         if ($null -ne $payload.params.bulletValue) {
             $script:BulletValue = [string]$payload.params.bulletValue

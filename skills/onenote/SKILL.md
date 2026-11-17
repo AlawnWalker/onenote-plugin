@@ -59,6 +59,11 @@ sets the width in points; `ONENOTE_IMAGE_MAX_WIDTH` caps the default).
 Inline bold/italic/code/links are stripped. `onenote_update` applies the
 configured page background.
 
+Tree drawings (` ```tree ` or bare `├─`/`└─` lines) are written as **body
+paragraphs** since 0.7.6 — same font/size as surrounding text, no paragraph
+spacing, one U+3000 of indentation per nesting level. Set `treeStyle: 'mono'`
+for the old Consolas code-block look.
+
 ## Configuration
 
 The server reads environment variables. The plugin launcher also reads
