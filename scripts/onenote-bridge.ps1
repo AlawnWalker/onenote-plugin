@@ -1109,6 +1109,24 @@ function Convert-PageXmlToBlocks($doc) {
             }
         }
     }
+    # A tree drawing often starts with a root line that has no box-drawing
+    # character ("arm_smmu_device_probe(dev)" followed by "├─ ..."). Without
+    # this, read-back would start the fence one line late and a read/write
+    # round trip would push the root line out into a paragraph. Treat the
+    # directly preceding paragraph as part of the run when it looks like a tree
+    # label rather than prose: same outline, no terminal punctuation.
+    for ($i = 1; $i -lt $blocks.Count; $i++) {
+        if ([string]$blocks[$i].type -ne 'tree') { continue }
+        $prev = $blocks[$i - 1]
+        if ([string]$prev.type -ne 'para') { continue }
+        if ($prev.Contains('outlineId') -and $blocks[$i].Contains('outlineId') -and
+            [string]$prev.outlineId -ne [string]$blocks[$i].outlineId) { continue }
+        $text = [string]$prev.text
+        if ($text -eq '') { continue }
+        if ($text -match '[。！？：；，、.!?:;,]$') { continue }
+        if ($text.Length -gt 80) { continue }
+        $prev.type = 'tree'
+    }
     return @{ title = $title; blocks = @($blocks) }
 }
 
